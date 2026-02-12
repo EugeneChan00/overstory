@@ -159,10 +159,11 @@ export async function watchCommand(args: string[]): Promise<void> {
 		// Check if a watchdog is already running
 		const existingPid = await readPidFile(pidFilePath);
 		if (existingPid !== null && isProcessRunning(existingPid)) {
-			process.stdout.write(
-				`Watchdog already running (PID: ${existingPid}). ` +
+			process.stderr.write(
+				`Error: Watchdog already running (PID: ${existingPid}). ` +
 					`Kill it first or remove ${pidFilePath}\n`,
 			);
+			process.exitCode = 1;
 			return;
 		}
 

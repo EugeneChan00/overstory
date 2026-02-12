@@ -16,7 +16,7 @@ import { slingCommand } from "./commands/sling.ts";
 import { statusCommand } from "./commands/status.ts";
 import { watchCommand } from "./commands/watch.ts";
 import { worktreeCommand } from "./commands/worktree.ts";
-import { OverstoryError } from "./errors.ts";
+import { OverstoryError, WorktreeError } from "./errors.ts";
 
 const VERSION = "0.1.0";
 
@@ -96,6 +96,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
+	// Friendly message when running outside a git repository
+	if (err instanceof WorktreeError && err.message.includes("not a git repository")) {
+		process.stderr.write("Not in an overstory project. Run 'overstory init' first.\n");
+		process.exit(1);
+	}
 	if (err instanceof OverstoryError) {
 		process.stderr.write(`Error [${err.code}]: ${err.message}\n`);
 		process.exit(1);

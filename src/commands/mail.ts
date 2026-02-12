@@ -177,8 +177,12 @@ function handleRead(args: string[], cwd: string): void {
 
 	const client = openClient(cwd);
 	try {
-		client.markRead(id);
-		process.stdout.write(`Marked ${id} as read.\n`);
+		const { alreadyRead } = client.markRead(id);
+		if (alreadyRead) {
+			process.stdout.write(`Message ${id} was already read.\n`);
+		} else {
+			process.stdout.write(`Marked ${id} as read.\n`);
+		}
 	} finally {
 		client.close();
 	}

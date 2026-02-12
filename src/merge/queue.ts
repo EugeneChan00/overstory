@@ -61,7 +61,7 @@ function readQueue(queuePath: string): MergeEntry[] {
 function writeQueue(queuePath: string, entries: MergeEntry[]): void {
 	try {
 		const { writeFileSync } = require("node:fs");
-		writeFileSync(queuePath, JSON.stringify(entries, null, "\t"), "utf-8");
+		writeFileSync(queuePath, `${JSON.stringify(entries, null, "\t")}\n`, "utf-8");
 	} catch (err) {
 		throw new MergeError(`Failed to write merge queue at ${queuePath}`, {
 			cause: err instanceof Error ? err : undefined,

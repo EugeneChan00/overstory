@@ -274,7 +274,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory log tool-start",
+							command: "overstory log tool-start --agent orchestrator",
 						},
 					],
 				},
@@ -285,7 +285,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory log tool-end",
+							command: "overstory log tool-end --agent orchestrator",
 						},
 					],
 				},
@@ -296,7 +296,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory log session-end",
+							command: "overstory log session-end --agent orchestrator",
 						},
 					],
 				},

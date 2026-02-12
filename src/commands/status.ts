@@ -7,6 +7,7 @@
 
 import { join } from "node:path";
 import { loadConfig } from "../config.ts";
+import { ValidationError } from "../errors.ts";
 import { createMailStore } from "../mail/store.ts";
 import { createMetricsStore } from "../metrics/store.ts";
 import type { AgentSession } from "../types.ts";
@@ -97,11 +98,15 @@ async function gatherStatus(root: string, agentName = "orchestrator"): Promise<S
 		}
 	}
 
-	// Persist reconciled state so it doesn't re-appear as booting/working next time
+	// Persist reconciled state so it doesn't re-appear as booting/working next time.
+	// Use write-to-tmp + rename for atomicity to avoid lost-writes from concurrent processes.
 	if (sessionsUpdated) {
 		try {
 			const sessionsPath = join(root, ".overstory", "sessions.json");
-			await Bun.write(sessionsPath, `${JSON.stringify(sessions, null, "\t")}\n`);
+			const tmpPath = `${sessionsPath}.tmp`;
+			await Bun.write(tmpPath, `${JSON.stringify(sessions, null, "\t")}\n`);
+			const { rename } = await import("node:fs/promises");
+			await rename(tmpPath, sessionsPath);
 		} catch {
 			// Best effort: don't fail status display if write fails
 		}
@@ -228,6 +233,14 @@ export async function statusCommand(args: string[]): Promise<void> {
 	const watch = hasFlag(args, "--watch");
 	const intervalStr = getFlag(args, "--interval");
 	const interval = intervalStr ? Number.parseInt(intervalStr, 10) : 3000;
+
+	if (Number.isNaN(interval) || interval < 500) {
+		throw new ValidationError("--interval must be a number >= 500 (milliseconds)", {
+			field: "interval",
+			value: intervalStr,
+		});
+	}
+
 	const agentName = getFlag(args, "--agent") ?? "orchestrator";
 
 	const cwd = process.cwd();

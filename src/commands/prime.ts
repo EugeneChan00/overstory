@@ -14,7 +14,7 @@ import { loadConfig } from "../config.ts";
 import { AgentError } from "../errors.ts";
 import { createMetricsStore } from "../metrics/store.ts";
 import { createMulchClient } from "../mulch/client.ts";
-import type { AgentIdentity, AgentManifest, SessionMetrics } from "../types.ts";
+import type { AgentIdentity, AgentManifest, AgentSession, SessionMetrics } from "../types.ts";
 
 /**
  * Parse CLI flags from the args array.
@@ -148,6 +148,24 @@ export async function primeCommand(args: string[]): Promise<void> {
 }
 
 /**
+ * Load the sessions registry from .overstory/sessions.json.
+ * Returns an empty array if the file doesn't exist.
+ */
+async function loadSessions(sessionsPath: string): Promise<AgentSession[]> {
+	const file = Bun.file(sessionsPath);
+	const exists = await file.exists();
+	if (!exists) {
+		return [];
+	}
+	try {
+		const text = await file.text();
+		return JSON.parse(text) as AgentSession[];
+	} catch {
+		return [];
+	}
+}
+
+/**
  * Output context for a specific agent.
  */
 async function outputAgentContext(
@@ -160,6 +178,11 @@ async function outputAgentContext(
 
 	sections.push(`# Agent Context: ${agentName}`);
 
+	// Check if the agent exists in sessions.json or has an identity file
+	const sessionsPath = join(config.project.root, ".overstory", "sessions.json");
+	const sessions = await loadSessions(sessionsPath);
+	const sessionExists = sessions.some((s) => s.agentName === agentName);
+
 	// Identity section
 	let identity: AgentIdentity | null = null;
 	try {
@@ -167,6 +190,13 @@ async function outputAgentContext(
 		identity = await loadIdentity(baseDir, agentName);
 	} catch {
 		// Identity may not exist yet
+	}
+
+	// Warn if agent is completely unknown (no session and no identity)
+	if (!sessionExists && identity === null) {
+		process.stderr.write(
+			`Warning: agent "${agentName}" not found in sessions or identity store.\n`,
+		);
 	}
 
 	sections.push("\n## Identity");

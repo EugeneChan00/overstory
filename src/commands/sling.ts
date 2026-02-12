@@ -141,7 +141,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 	const depthStr = getFlag(args, "--depth");
 	const depth = depthStr !== undefined ? Number.parseInt(depthStr, 10) : 0;
 
-	if (!name) {
+	if (!name || name.trim().length === 0) {
 		throw new ValidationError("--name is required for sling", { field: "name" });
 	}
 
@@ -164,7 +164,12 @@ export async function slingCommand(args: string[]): Promise<void> {
 		}
 	}
 
-	const fileScope = filesRaw ? filesRaw.split(",").map((f) => f.trim()) : [];
+	const fileScope = filesRaw
+		? filesRaw
+				.split(",")
+				.map((f) => f.trim())
+				.filter((f) => f.length > 0)
+		: [];
 
 	// 1. Load config
 	const cwd = process.cwd();

@@ -31,8 +31,8 @@ export interface MailClient {
 	/** List messages with optional filters. */
 	list(filters?: { from?: string; to?: string; unread?: boolean }): MailMessage[];
 
-	/** Mark a message as read by ID. */
-	markRead(id: string): void;
+	/** Mark a message as read by ID. Returns whether the message was already read. */
+	markRead(id: string): { alreadyRead: boolean };
 
 	/** Reply to a message. Returns the new message ID. */
 	reply(messageId: string, body: string, from: string): string;
@@ -111,14 +111,18 @@ export function createMailClient(store: MailStore): MailClient {
 			return store.getAll(filters);
 		},
 
-		markRead(id): void {
+		markRead(id): { alreadyRead: boolean } {
 			const msg = store.getById(id);
 			if (!msg) {
 				throw new MailError(`Message not found: ${id}`, {
 					messageId: id,
 				});
 			}
+			if (msg.read) {
+				return { alreadyRead: true };
+			}
 			store.markRead(id);
+			return { alreadyRead: false };
 		},
 
 		reply(messageId, body, from): string {

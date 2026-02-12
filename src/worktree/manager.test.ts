@@ -4,7 +4,12 @@ import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorktreeError } from "../errors.ts";
-import { cleanupTempDir, commitFile, createTempGitRepo } from "../test-helpers.ts";
+import {
+	cleanupTempDir,
+	commitFile,
+	createTempGitRepo,
+	getDefaultBranch,
+} from "../test-helpers.ts";
 import { createWorktree, listWorktrees, removeWorktree } from "./manager.ts";
 
 /**
@@ -33,10 +38,12 @@ async function git(cwd: string, args: string[]): Promise<string> {
 describe("createWorktree", () => {
 	let repoDir: string;
 	let worktreesDir: string;
+	let defaultBranch: string;
 
 	beforeEach(async () => {
 		// realpathSync resolves macOS /var -> /private/var symlink so paths match git output
 		repoDir = realpathSync(await createTempGitRepo());
+		defaultBranch = await getDefaultBranch(repoDir);
 		worktreesDir = join(repoDir, ".overstory", "worktrees");
 		await mkdir(worktreesDir, { recursive: true });
 	});
@@ -50,7 +57,7 @@ describe("createWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc123",
 		});
 
@@ -63,7 +70,7 @@ describe("createWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc123",
 		});
 
@@ -77,7 +84,7 @@ describe("createWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc123",
 		});
 
@@ -90,7 +97,7 @@ describe("createWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc123",
 		});
 
@@ -99,7 +106,7 @@ describe("createWorktree", () => {
 				repoRoot: repoDir,
 				baseDir: worktreesDir,
 				agentName: "auth-login",
-				baseBranch: "main",
+				baseBranch: defaultBranch,
 				beadId: "bead-abc123",
 			}),
 		).rejects.toThrow(WorktreeError);
@@ -111,7 +118,7 @@ describe("createWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc123",
 		});
 
@@ -120,7 +127,7 @@ describe("createWorktree", () => {
 				repoRoot: repoDir,
 				baseDir: worktreesDir,
 				agentName: "auth-login",
-				baseBranch: "main",
+				baseBranch: defaultBranch,
 				beadId: "bead-abc123",
 			});
 			// Should not reach here
@@ -137,9 +144,11 @@ describe("createWorktree", () => {
 describe("listWorktrees", () => {
 	let repoDir: string;
 	let worktreesDir: string;
+	let defaultBranch: string;
 
 	beforeEach(async () => {
 		repoDir = realpathSync(await createTempGitRepo());
+		defaultBranch = await getDefaultBranch(repoDir);
 		worktreesDir = join(repoDir, ".overstory", "worktrees");
 		await mkdir(worktreesDir, { recursive: true });
 	});
@@ -164,7 +173,7 @@ describe("listWorktrees", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc",
 		});
 
@@ -172,7 +181,7 @@ describe("listWorktrees", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "data-sync",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-xyz",
 		});
 
@@ -196,7 +205,7 @@ describe("listWorktrees", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "feature-worker",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-123",
 		});
 
@@ -213,7 +222,7 @@ describe("listWorktrees", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc",
 		});
 
@@ -238,9 +247,11 @@ describe("listWorktrees", () => {
 describe("removeWorktree", () => {
 	let repoDir: string;
 	let worktreesDir: string;
+	let defaultBranch: string;
 
 	beforeEach(async () => {
 		repoDir = realpathSync(await createTempGitRepo());
+		defaultBranch = await getDefaultBranch(repoDir);
 		worktreesDir = join(repoDir, ".overstory", "worktrees");
 		await mkdir(worktreesDir, { recursive: true });
 	});
@@ -254,7 +265,7 @@ describe("removeWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc",
 		});
 
@@ -270,7 +281,7 @@ describe("removeWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc",
 		});
 
@@ -285,7 +296,7 @@ describe("removeWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc",
 		});
 
@@ -301,7 +312,7 @@ describe("removeWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc",
 		});
 
@@ -320,7 +331,7 @@ describe("removeWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc",
 		});
 
@@ -339,7 +350,7 @@ describe("removeWorktree", () => {
 			repoRoot: repoDir,
 			baseDir: worktreesDir,
 			agentName: "auth-login",
-			baseBranch: "main",
+			baseBranch: defaultBranch,
 			beadId: "bead-abc",
 		});
 

@@ -10,7 +10,13 @@ import {
 } from "bun:test";
 import { join } from "node:path";
 import { MergeError } from "../errors.ts";
-import { cleanupTempDir, commitFile, createTempGitRepo, runGitInDir } from "../test-helpers.ts";
+import {
+	cleanupTempDir,
+	commitFile,
+	createTempGitRepo,
+	getDefaultBranch,
+	runGitInDir,
+} from "../test-helpers.ts";
 import type { MergeEntry } from "../types.ts";
 import { createMergeResolver, looksLikeProse } from "./resolver.ts";
 
@@ -53,11 +59,11 @@ function makeTestEntry(overrides?: Partial<MergeEntry>): MergeEntry {
 /**
  * Set up a clean merge scenario: feature branch adds a new file with no conflict.
  */
-async function setupCleanMerge(dir: string): Promise<void> {
+async function setupCleanMerge(dir: string, baseBranch: string): Promise<void> {
 	await commitFile(dir, "src/main-file.ts", "main content\n");
 	await runGitInDir(dir, ["checkout", "-b", "feature-branch"]);
 	await commitFile(dir, "src/feature-file.ts", "feature content\n");
-	await runGitInDir(dir, ["checkout", "main"]);
+	await runGitInDir(dir, ["checkout", baseBranch]);
 }
 
 /**
@@ -65,11 +71,11 @@ async function setupCleanMerge(dir: string): Promise<void> {
  * branches. Both sides must diverge from the common ancestor to produce
  * conflict markers.
  */
-async function setupContentConflict(dir: string): Promise<void> {
+async function setupContentConflict(dir: string, baseBranch: string): Promise<void> {
 	await commitFile(dir, "src/test.ts", "original content\n");
 	await runGitInDir(dir, ["checkout", "-b", "feature-branch"]);
 	await commitFile(dir, "src/test.ts", "feature content\n");
-	await runGitInDir(dir, ["checkout", "main"]);
+	await runGitInDir(dir, ["checkout", baseBranch]);
 	await commitFile(dir, "src/test.ts", "main modified content\n");
 }
 
@@ -81,12 +87,13 @@ async function setupContentConflict(dir: string): Promise<void> {
  */
 async function setupDeleteModifyConflict(
 	dir: string,
+	baseBranch: string,
 	branchName = "feature-branch",
 ): Promise<void> {
 	await commitFile(dir, "src/test.ts", "original content\n");
 	await runGitInDir(dir, ["checkout", "-b", branchName]);
 	await commitFile(dir, "src/test.ts", "modified by agent\n");
-	await runGitInDir(dir, ["checkout", "main"]);
+	await runGitInDir(dir, ["checkout", baseBranch]);
 	await runGitInDir(dir, ["rm", "src/test.ts"]);
 	await runGitInDir(dir, ["commit", "-m", "delete src/test.ts"]);
 }
@@ -97,13 +104,13 @@ async function setupDeleteModifyConflict(
  * and set entry.filesModified to a different file that exists on both branches
  * (so git show works for both in reimagine).
  */
-async function setupReimagineScenario(dir: string): Promise<void> {
+async function setupReimagineScenario(dir: string, baseBranch: string): Promise<void> {
 	await commitFile(dir, "src/conflict-file.ts", "original content\n");
 	await commitFile(dir, "src/reimagine-target.ts", "main version of target\n");
 	await runGitInDir(dir, ["checkout", "-b", "feature-branch"]);
 	await commitFile(dir, "src/conflict-file.ts", "modified by agent\n");
 	await commitFile(dir, "src/reimagine-target.ts", "feature version of target\n");
-	await runGitInDir(dir, ["checkout", "main"]);
+	await runGitInDir(dir, ["checkout", baseBranch]);
 	await runGitInDir(dir, ["rm", "src/conflict-file.ts"]);
 	await runGitInDir(dir, ["commit", "-m", "delete conflict file"]);
 }
@@ -113,7 +120,8 @@ describe("createMergeResolver", () => {
 		test("returns success with correct result shape and file content", async () => {
 			const repoDir = await createTempGitRepo();
 			try {
-				await setupCleanMerge(repoDir);
+				const defaultBranch = await getDefaultBranch(repoDir);
+				await setupCleanMerge(repoDir, defaultBranch);
 
 				const entry = makeTestEntry({
 					branchName: "feature-branch",
@@ -125,7 +133,7 @@ describe("createMergeResolver", () => {
 					reimagineEnabled: false,
 				});
 
-				const result = await resolver.resolve(entry, "main", repoDir);
+				const result = await resolver.resolve(entry, defaultBranch, repoDir);
 
 				expect(result.success).toBe(true);
 				expect(result.tier).toBe("clean-merge");
@@ -192,7 +200,8 @@ describe("createMergeResolver", () => {
 		test("auto-resolves conflicts keeping incoming changes with correct content", async () => {
 			const repoDir = await createTempGitRepo();
 			try {
-				await setupContentConflict(repoDir);
+				const defaultBranch = await getDefaultBranch(repoDir);
+				await setupContentConflict(repoDir, defaultBranch);
 
 				const entry = makeTestEntry({
 					branchName: "feature-branch",
@@ -204,7 +213,7 @@ describe("createMergeResolver", () => {
 					reimagineEnabled: false,
 				});
 
-				const result = await resolver.resolve(entry, "main", repoDir);
+				const result = await resolver.resolve(entry, defaultBranch, repoDir);
 
 				expect(result.success).toBe(true);
 				expect(result.tier).toBe("auto-resolve");
@@ -225,10 +234,12 @@ describe("createMergeResolver", () => {
 		// After the first test (aiResolve=false), the resolver aborts the merge and
 		// leaves the repo clean. The second test can retry the merge on the same repo.
 		let repoDir: string;
+		let defaultBranch: string;
 
 		beforeAll(async () => {
 			repoDir = await createTempGitRepo();
-			await setupDeleteModifyConflict(repoDir);
+			defaultBranch = await getDefaultBranch(repoDir);
+			await setupDeleteModifyConflict(repoDir, defaultBranch);
 		});
 
 		afterAll(async () => {
@@ -247,7 +258,7 @@ describe("createMergeResolver", () => {
 				reimagineEnabled: false,
 			});
 
-			const result = await resolver.resolve(entry, "main", repoDir);
+			const result = await resolver.resolve(entry, defaultBranch, repoDir);
 
 			expect(result.success).toBe(false);
 			expect(result.entry.status).toBe("failed");
@@ -281,7 +292,7 @@ describe("createMergeResolver", () => {
 					reimagineEnabled: false,
 				});
 
-				const result = await resolver.resolve(entry, "main", repoDir);
+				const result = await resolver.resolve(entry, defaultBranch, repoDir);
 
 				expect(claudeCalled).toBe(true);
 				expect(result.success).toBe(true);
@@ -298,10 +309,12 @@ describe("createMergeResolver", () => {
 		// After the first test (reimagine=false), the resolver aborts the merge and
 		// leaves the repo clean. The second test can retry the merge on the same repo.
 		let repoDir: string;
+		let defaultBranch: string;
 
 		beforeAll(async () => {
 			repoDir = await createTempGitRepo();
-			await setupReimagineScenario(repoDir);
+			defaultBranch = await getDefaultBranch(repoDir);
+			await setupReimagineScenario(repoDir, defaultBranch);
 		});
 
 		afterAll(async () => {
@@ -320,7 +333,7 @@ describe("createMergeResolver", () => {
 				reimagineEnabled: false,
 			});
 
-			const result = await resolver.resolve(entry, "main", repoDir);
+			const result = await resolver.resolve(entry, defaultBranch, repoDir);
 
 			expect(result.success).toBe(false);
 			expect(result.entry.status).toBe("failed");
@@ -354,7 +367,7 @@ describe("createMergeResolver", () => {
 					reimagineEnabled: true,
 				});
 
-				const result = await resolver.resolve(entry, "main", repoDir);
+				const result = await resolver.resolve(entry, defaultBranch, repoDir);
 
 				expect(claudeCalled).toBe(true);
 				expect(result.success).toBe(true);
@@ -376,7 +389,8 @@ describe("createMergeResolver", () => {
 		test("returns failed status and repo is clean when all tiers fail", async () => {
 			const repoDir = await createTempGitRepo();
 			try {
-				await setupDeleteModifyConflict(repoDir);
+				const defaultBranch = await getDefaultBranch(repoDir);
+				await setupDeleteModifyConflict(repoDir, defaultBranch);
 
 				const entry = makeTestEntry({
 					branchName: "feature-branch",
@@ -388,7 +402,7 @@ describe("createMergeResolver", () => {
 					reimagineEnabled: false,
 				});
 
-				const result = await resolver.resolve(entry, "main", repoDir);
+				const result = await resolver.resolve(entry, defaultBranch, repoDir);
 
 				expect(result.success).toBe(false);
 				expect(result.entry.status).toBe("failed");
@@ -407,9 +421,11 @@ describe("createMergeResolver", () => {
 
 	describe("result shape", () => {
 		let repoDir: string;
+		let defaultBranch: string;
 
 		beforeEach(async () => {
 			repoDir = await createTempGitRepo();
+			defaultBranch = await getDefaultBranch(repoDir);
 		});
 
 		afterEach(async () => {
@@ -417,7 +433,7 @@ describe("createMergeResolver", () => {
 		});
 
 		test("successful result has correct MergeResult shape", async () => {
-			await setupCleanMerge(repoDir);
+			await setupCleanMerge(repoDir, defaultBranch);
 
 			const resolver = createMergeResolver({
 				aiResolveEnabled: false,
@@ -429,7 +445,7 @@ describe("createMergeResolver", () => {
 					branchName: "feature-branch",
 					filesModified: ["src/feature-file.ts"],
 				}),
-				"main",
+				defaultBranch,
 				repoDir,
 			);
 
@@ -441,7 +457,7 @@ describe("createMergeResolver", () => {
 		});
 
 		test("failed result preserves original entry fields", async () => {
-			await setupDeleteModifyConflict(repoDir, "overstory/my-agent/bead-xyz");
+			await setupDeleteModifyConflict(repoDir, defaultBranch, "overstory/my-agent/bead-xyz");
 
 			const entry = makeTestEntry({
 				branchName: "overstory/my-agent/bead-xyz",
@@ -455,7 +471,7 @@ describe("createMergeResolver", () => {
 				reimagineEnabled: false,
 			});
 
-			const result = await resolver.resolve(entry, "main", repoDir);
+			const result = await resolver.resolve(entry, defaultBranch, repoDir);
 
 			expect(result.entry.branchName).toBe("overstory/my-agent/bead-xyz");
 			expect(result.entry.beadId).toBe("bead-xyz");
@@ -467,11 +483,12 @@ describe("createMergeResolver", () => {
 		test("succeeds when already on canonical branch (skips checkout)", async () => {
 			const repoDir = await createTempGitRepo();
 			try {
-				await setupCleanMerge(repoDir);
+				const defaultBranch = await getDefaultBranch(repoDir);
+				await setupCleanMerge(repoDir, defaultBranch);
 
-				// Verify we're on main
+				// Verify we're on the default branch
 				const branch = await runGitInDir(repoDir, ["symbolic-ref", "--short", "HEAD"]);
-				expect(branch.trim()).toBe("main");
+				expect(branch.trim()).toBe(defaultBranch);
 
 				const entry = makeTestEntry({
 					branchName: "feature-branch",
@@ -483,7 +500,7 @@ describe("createMergeResolver", () => {
 					reimagineEnabled: false,
 				});
 
-				const result = await resolver.resolve(entry, "main", repoDir);
+				const result = await resolver.resolve(entry, defaultBranch, repoDir);
 				expect(result.success).toBe(true);
 				expect(result.tier).toBe("clean-merge");
 			} finally {
@@ -494,7 +511,8 @@ describe("createMergeResolver", () => {
 		test("checks out canonical when on a different branch", async () => {
 			const repoDir = await createTempGitRepo();
 			try {
-				await setupCleanMerge(repoDir);
+				const defaultBranch = await getDefaultBranch(repoDir);
+				await setupCleanMerge(repoDir, defaultBranch);
 
 				// Switch to a different branch
 				await runGitInDir(repoDir, ["checkout", "-b", "some-other-branch"]);
@@ -511,7 +529,7 @@ describe("createMergeResolver", () => {
 					reimagineEnabled: false,
 				});
 
-				const result = await resolver.resolve(entry, "main", repoDir);
+				const result = await resolver.resolve(entry, defaultBranch, repoDir);
 				expect(result.success).toBe(true);
 				expect(result.tier).toBe("clean-merge");
 			} finally {
@@ -558,7 +576,8 @@ describe("createMergeResolver", () => {
 		test("rejects prose output and falls through to failure", async () => {
 			const repoDir = await createTempGitRepo();
 			try {
-				await setupDeleteModifyConflict(repoDir);
+				const defaultBranch = await getDefaultBranch(repoDir);
+				await setupDeleteModifyConflict(repoDir, defaultBranch);
 
 				const originalSpawn = Bun.spawn;
 				const selectiveMock = (...args: unknown[]): unknown => {
@@ -587,7 +606,7 @@ describe("createMergeResolver", () => {
 						reimagineEnabled: false,
 					});
 
-					const result = await resolver.resolve(entry, "main", repoDir);
+					const result = await resolver.resolve(entry, defaultBranch, repoDir);
 
 					// Should fail because prose was rejected
 					expect(result.success).toBe(false);

@@ -79,6 +79,17 @@ export async function commitFile(
 }
 
 /**
+ * Get the default branch name of a git repo (e.g., "main" or "master").
+ * Uses `git symbolic-ref --short HEAD` to read the current branch.
+ *
+ * Useful in tests to avoid hardcoding "main" -- CI runners may default to "master".
+ */
+export async function getDefaultBranch(repoDir: string): Promise<string> {
+	const stdout = await runGitInDir(repoDir, ["symbolic-ref", "--short", "HEAD"]);
+	return stdout.trim();
+}
+
+/**
  * Remove a temp directory. Safe to call even if the directory doesn't exist.
  */
 export async function cleanupTempDir(dir: string): Promise<void> {

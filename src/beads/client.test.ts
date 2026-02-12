@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { realpathSync } from "node:fs";
 import { AgentError } from "../errors.ts";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
@@ -39,19 +39,37 @@ async function initBeads(cwd: string): Promise<void> {
 
 const bdAvailable = isBdAvailable();
 
+/**
+ * Optimized test suite: uses a single shared repo (beforeAll) instead of
+ * creating a fresh repo per test. All 16 original tests share one repo
+ * since they create issues with unique IDs and use toContain/not.toContain
+ * assertions. This reduces setup from ~96 subprocess spawns to ~6.
+ */
 describe("createBeadsClient (integration)", () => {
 	let tempDir: string;
 	let client: BeadsClient;
 
-	beforeEach(async () => {
+	// Pre-created issue IDs for tests that need existing issues
+	let openIssueId: string;
+	let claimedIssueId: string;
+	let closedIssueId: string;
+
+	beforeAll(async () => {
 		if (!bdAvailable) return;
 		// realpathSync resolves macOS /var -> /private/var symlink so paths match
 		tempDir = realpathSync(await createTempGitRepo());
 		await initBeads(tempDir);
 		client = createBeadsClient(tempDir);
+
+		// Pre-create issues used by read-only tests (list, ready, show)
+		openIssueId = await client.create("Pre-created open issue");
+		claimedIssueId = await client.create("Pre-created claimed issue");
+		await client.claim(claimedIssueId);
+		closedIssueId = await client.create("Pre-created closed issue");
+		await client.close(closedIssueId);
 	});
 
-	afterEach(async () => {
+	afterAll(async () => {
 		if (!bdAvailable) return;
 		await cleanupTempDir(tempDir);
 	});
@@ -102,111 +120,78 @@ describe("createBeadsClient (integration)", () => {
 	});
 
 	describe("claim", () => {
-		test.skipIf(!bdAvailable)("changes issue status to in_progress", async () => {
+		test.skipIf(!bdAvailable)("changes issue status to in_progress and returns void", async () => {
 			const id = await client.create("Claim test issue");
 
-			await client.claim(id);
+			const result = await client.claim(id);
+			expect(result).toBeUndefined();
 
 			const issue = await client.show(id);
 			expect(issue.status).toBe("in_progress");
 		});
-
-		test.skipIf(!bdAvailable)("returns void on success", async () => {
-			const id = await client.create("Claim void test");
-
-			const result = await client.claim(id);
-			expect(result).toBeUndefined();
-		});
 	});
 
 	describe("close", () => {
-		test.skipIf(!bdAvailable)("closes an issue without reason", async () => {
-			const id = await client.create("Close test issue");
+		test.skipIf(!bdAvailable)("closes issues with and without reason", async () => {
+			const id1 = await client.create("Close test issue");
+			const id2 = await client.create("Close reason test");
 
-			await client.close(id);
+			await client.close(id1);
+			await client.close(id2, "Completed all acceptance criteria");
 
-			const issue = await client.show(id);
-			expect(issue.status).toBe("closed");
-		});
+			const issue1 = await client.show(id1);
+			expect(issue1.status).toBe("closed");
 
-		test.skipIf(!bdAvailable)("closes an issue with a reason", async () => {
-			const id = await client.create("Close reason test");
-
-			await client.close(id, "Completed all acceptance criteria");
-
-			const issue = await client.show(id);
-			expect(issue.status).toBe("closed");
+			const issue2 = await client.show(id2);
+			expect(issue2.status).toBe("closed");
 		});
 	});
 
 	describe("list", () => {
 		test.skipIf(!bdAvailable)("returns all issues", async () => {
-			await client.create("List issue 1");
-			await client.create("List issue 2");
-
 			const issues = await client.list();
 
-			expect(issues.length).toBeGreaterThanOrEqual(2);
+			// Pre-created issues should be present (plus any from other tests)
+			expect(issues.length).toBeGreaterThanOrEqual(3);
 			const titles = issues.map((i) => i.title);
-			expect(titles).toContain("List issue 1");
-			expect(titles).toContain("List issue 2");
+			expect(titles).toContain("Pre-created open issue");
+			expect(titles).toContain("Pre-created claimed issue");
 		});
 
 		test.skipIf(!bdAvailable)("filters by status", async () => {
-			const id1 = await client.create("Open issue");
-			const id2 = await client.create("Claimed issue");
-			await client.claim(id2);
-
 			const openIssues = await client.list({ status: "open" });
 			const openIds = openIssues.map((i) => i.id);
-			expect(openIds).toContain(id1);
-			expect(openIds).not.toContain(id2);
+			expect(openIds).toContain(openIssueId);
+			expect(openIds).not.toContain(claimedIssueId);
+			expect(openIds).not.toContain(closedIssueId);
 
 			const inProgressIssues = await client.list({ status: "in_progress" });
 			const inProgressIds = inProgressIssues.map((i) => i.id);
-			expect(inProgressIds).toContain(id2);
-			expect(inProgressIds).not.toContain(id1);
+			expect(inProgressIds).toContain(claimedIssueId);
+			expect(inProgressIds).not.toContain(openIssueId);
 		});
 
 		test.skipIf(!bdAvailable)("respects limit option", async () => {
-			await client.create("Limit issue 1");
-			await client.create("Limit issue 2");
-			await client.create("Limit issue 3");
-
 			const limited = await client.list({ limit: 1 });
 			expect(limited).toHaveLength(1);
 		});
 	});
 
 	describe("ready", () => {
-		test.skipIf(!bdAvailable)("returns open unblocked issues", async () => {
-			const id = await client.create("Ready issue");
+		test.skipIf(!bdAvailable)(
+			"returns open unblocked issues but not claimed or closed",
+			async () => {
+				const readyIssues = await client.ready();
+				const readyIds = readyIssues.map((i) => i.id);
 
-			const readyIssues = await client.ready();
-
-			const readyIds = readyIssues.map((i) => i.id);
-			expect(readyIds).toContain(id);
-		});
-
-		test.skipIf(!bdAvailable)("does not return in_progress issues", async () => {
-			const id = await client.create("Claimed ready issue");
-			await client.claim(id);
-
-			const readyIssues = await client.ready();
-
-			const readyIds = readyIssues.map((i) => i.id);
-			expect(readyIds).not.toContain(id);
-		});
-
-		test.skipIf(!bdAvailable)("does not return closed issues", async () => {
-			const id = await client.create("Closed ready issue");
-			await client.close(id);
-
-			const readyIssues = await client.ready();
-
-			const readyIds = readyIssues.map((i) => i.id);
-			expect(readyIds).not.toContain(id);
-		});
+				// Open issue should appear in ready
+				expect(readyIds).toContain(openIssueId);
+				// Claimed issue should not appear in ready
+				expect(readyIds).not.toContain(claimedIssueId);
+				// Closed issue should not appear in ready
+				expect(readyIds).not.toContain(closedIssueId);
+			},
+		);
 	});
 
 	describe("error handling", () => {
@@ -217,7 +202,7 @@ describe("createBeadsClient (integration)", () => {
 		test.skipIf(!bdAvailable)(
 			"throws AgentError when bd is run without beads initialized",
 			async () => {
-				// Create a git repo without bd init
+				// Create a git repo without bd init — independent from shared repo
 				const bareDir = realpathSync(await createTempGitRepo());
 				const bareClient = createBeadsClient(bareDir);
 

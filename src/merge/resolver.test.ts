@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	spyOn,
+	test,
+} from "bun:test";
 import { join } from "node:path";
 import { MergeError } from "../errors.ts";
 import { cleanupTempDir, commitFile, createTempGitRepo, runGitInDir } from "../test-helpers.ts";
@@ -41,72 +50,110 @@ function makeTestEntry(overrides?: Partial<MergeEntry>): MergeEntry {
 	};
 }
 
+/**
+ * Set up a clean merge scenario: feature branch adds a new file with no conflict.
+ */
+async function setupCleanMerge(dir: string): Promise<void> {
+	await commitFile(dir, "src/main-file.ts", "main content\n");
+	await runGitInDir(dir, ["checkout", "-b", "feature-branch"]);
+	await commitFile(dir, "src/feature-file.ts", "feature content\n");
+	await runGitInDir(dir, ["checkout", "main"]);
+}
+
+/**
+ * Set up a real content conflict: create a file, branch, modify on both
+ * branches. Both sides must diverge from the common ancestor to produce
+ * conflict markers.
+ */
+async function setupContentConflict(dir: string): Promise<void> {
+	await commitFile(dir, "src/test.ts", "original content\n");
+	await runGitInDir(dir, ["checkout", "-b", "feature-branch"]);
+	await commitFile(dir, "src/test.ts", "feature content\n");
+	await runGitInDir(dir, ["checkout", "main"]);
+	await commitFile(dir, "src/test.ts", "main modified content\n");
+}
+
+/**
+ * Create a delete/modify conflict: file is deleted on main but modified on
+ * the feature branch. This produces a conflict with NO conflict markers in
+ * the working copy, causing Tier 2 auto-resolve to fail (resolveConflictsKeepIncoming
+ * returns null). This naturally escalates to Tier 3 or 4.
+ */
+async function setupDeleteModifyConflict(
+	dir: string,
+	branchName = "feature-branch",
+): Promise<void> {
+	await commitFile(dir, "src/test.ts", "original content\n");
+	await runGitInDir(dir, ["checkout", "-b", branchName]);
+	await commitFile(dir, "src/test.ts", "modified by agent\n");
+	await runGitInDir(dir, ["checkout", "main"]);
+	await runGitInDir(dir, ["rm", "src/test.ts"]);
+	await runGitInDir(dir, ["commit", "-m", "delete src/test.ts"]);
+}
+
+/**
+ * Set up a scenario where Tier 2 auto-resolve fails but Tier 4 reimagine can
+ * succeed. We create a delete/modify conflict on one file (causes Tier 2 to fail)
+ * and set entry.filesModified to a different file that exists on both branches
+ * (so git show works for both in reimagine).
+ */
+async function setupReimagineScenario(dir: string): Promise<void> {
+	await commitFile(dir, "src/conflict-file.ts", "original content\n");
+	await commitFile(dir, "src/reimagine-target.ts", "main version of target\n");
+	await runGitInDir(dir, ["checkout", "-b", "feature-branch"]);
+	await commitFile(dir, "src/conflict-file.ts", "modified by agent\n");
+	await commitFile(dir, "src/reimagine-target.ts", "feature version of target\n");
+	await runGitInDir(dir, ["checkout", "main"]);
+	await runGitInDir(dir, ["rm", "src/conflict-file.ts"]);
+	await runGitInDir(dir, ["commit", "-m", "delete conflict file"]);
+}
+
 describe("createMergeResolver", () => {
-	let repoDir: string;
-
-	beforeEach(async () => {
-		repoDir = await createTempGitRepo();
-	});
-
-	afterEach(async () => {
-		await cleanupTempDir(repoDir);
-	});
-
 	describe("Tier 1: Clean merge", () => {
-		test("returns success with tier clean-merge when git merge succeeds", async () => {
-			// Commit a file on main
-			await commitFile(repoDir, "src/main-file.ts", "main content\n");
+		test("returns success with correct result shape and file content", async () => {
+			const repoDir = await createTempGitRepo();
+			try {
+				await setupCleanMerge(repoDir);
 
-			// Create feature branch and commit a different file
-			await runGitInDir(repoDir, ["checkout", "-b", "feature-branch"]);
-			await commitFile(repoDir, "src/feature-file.ts", "feature content\n");
+				const entry = makeTestEntry({
+					branchName: "feature-branch",
+					filesModified: ["src/feature-file.ts"],
+				});
 
-			// Switch back to main
-			await runGitInDir(repoDir, ["checkout", "main"]);
+				const resolver = createMergeResolver({
+					aiResolveEnabled: false,
+					reimagineEnabled: false,
+				});
 
-			const entry = makeTestEntry({
-				branchName: "feature-branch",
-				filesModified: ["src/feature-file.ts"],
-			});
+				const result = await resolver.resolve(entry, "main", repoDir);
 
-			const resolver = createMergeResolver({
-				aiResolveEnabled: false,
-				reimagineEnabled: false,
-			});
+				expect(result.success).toBe(true);
+				expect(result.tier).toBe("clean-merge");
+				expect(result.entry.status).toBe("merged");
+				expect(result.entry.resolvedTier).toBe("clean-merge");
+				expect(result.conflictFiles).toEqual([]);
+				expect(result.errorMessage).toBeNull();
 
-			const result = await resolver.resolve(entry, "main", repoDir);
+				// After merge, the feature file should exist on main
+				const file = Bun.file(join(repoDir, "src/feature-file.ts"));
+				const content = await file.text();
+				expect(content).toBe("feature content\n");
+			} finally {
+				await cleanupTempDir(repoDir);
+			}
+		});
+	});
 
-			expect(result.success).toBe(true);
-			expect(result.tier).toBe("clean-merge");
-			expect(result.entry.status).toBe("merged");
-			expect(result.entry.resolvedTier).toBe("clean-merge");
-			expect(result.conflictFiles).toEqual([]);
-			expect(result.errorMessage).toBeNull();
+	describe("Tier 1: Checkout failure", () => {
+		// Both tests only attempt checkout of nonexistent branches -- no repo mutation.
+		let repoDir: string;
+
+		beforeAll(async () => {
+			repoDir = await createTempGitRepo();
 		});
 
-		test("feature file exists on main after clean merge", async () => {
-			await commitFile(repoDir, "src/main-file.ts", "main content\n");
-
-			await runGitInDir(repoDir, ["checkout", "-b", "feature-branch"]);
-			await commitFile(repoDir, "src/feature-file.ts", "feature content\n");
-			await runGitInDir(repoDir, ["checkout", "main"]);
-
-			const entry = makeTestEntry({
-				branchName: "feature-branch",
-				filesModified: ["src/feature-file.ts"],
-			});
-
-			const resolver = createMergeResolver({
-				aiResolveEnabled: false,
-				reimagineEnabled: false,
-			});
-
-			await resolver.resolve(entry, "main", repoDir);
-
-			// After merge, the feature file should exist on main
-			const file = Bun.file(join(repoDir, "src/feature-file.ts"));
-			const content = await file.text();
-			expect(content).toBe("feature content\n");
+		afterAll(async () => {
+			await cleanupTempDir(repoDir);
 		});
 
 		test("throws MergeError if checkout fails", async () => {
@@ -117,7 +164,6 @@ describe("createMergeResolver", () => {
 				reimagineEnabled: false,
 			});
 
-			// Try to checkout a branch that doesn't exist
 			await expect(resolver.resolve(entry, "nonexistent-branch", repoDir)).rejects.toThrow(
 				MergeError,
 			);
@@ -143,91 +189,54 @@ describe("createMergeResolver", () => {
 	});
 
 	describe("Tier 1 fail -> Tier 2: Auto-resolve", () => {
-		/**
-		 * Set up a real content conflict: create a file, branch, modify on both
-		 * branches. Both sides must diverge from the common ancestor to produce
-		 * conflict markers.
-		 */
-		async function setupContentConflict(dir: string): Promise<void> {
-			// Create original file on main (the common ancestor version)
-			await commitFile(dir, "src/test.ts", "original content\n");
+		test("auto-resolves conflicts keeping incoming changes with correct content", async () => {
+			const repoDir = await createTempGitRepo();
+			try {
+				await setupContentConflict(repoDir);
 
-			// Create feature branch and modify the file
-			await runGitInDir(dir, ["checkout", "-b", "feature-branch"]);
-			await commitFile(dir, "src/test.ts", "feature content\n");
+				const entry = makeTestEntry({
+					branchName: "feature-branch",
+					filesModified: ["src/test.ts"],
+				});
 
-			// Switch back to main and make a different modification
-			await runGitInDir(dir, ["checkout", "main"]);
-			await commitFile(dir, "src/test.ts", "main modified content\n");
-		}
+				const resolver = createMergeResolver({
+					aiResolveEnabled: false,
+					reimagineEnabled: false,
+				});
 
-		test("auto-resolves conflicts by keeping incoming changes", async () => {
-			await setupContentConflict(repoDir);
+				const result = await resolver.resolve(entry, "main", repoDir);
 
-			const entry = makeTestEntry({
-				branchName: "feature-branch",
-				filesModified: ["src/test.ts"],
-			});
+				expect(result.success).toBe(true);
+				expect(result.tier).toBe("auto-resolve");
+				expect(result.entry.status).toBe("merged");
+				expect(result.entry.resolvedTier).toBe("auto-resolve");
 
-			const resolver = createMergeResolver({
-				aiResolveEnabled: false,
-				reimagineEnabled: false,
-			});
-
-			const result = await resolver.resolve(entry, "main", repoDir);
-
-			expect(result.success).toBe(true);
-			expect(result.tier).toBe("auto-resolve");
-			expect(result.entry.status).toBe("merged");
-			expect(result.entry.resolvedTier).toBe("auto-resolve");
-		});
-
-		test("resolved file contains incoming (branch) content", async () => {
-			await setupContentConflict(repoDir);
-
-			const entry = makeTestEntry({
-				branchName: "feature-branch",
-				filesModified: ["src/test.ts"],
-			});
-
-			const resolver = createMergeResolver({
-				aiResolveEnabled: false,
-				reimagineEnabled: false,
-			});
-
-			await resolver.resolve(entry, "main", repoDir);
-
-			// The resolved file should contain the incoming (feature branch) content
-			const file = Bun.file(join(repoDir, "src/test.ts"));
-			const content = await file.text();
-			expect(content).toBe("feature content\n");
+				// The resolved file should contain the incoming (feature branch) content
+				const file = Bun.file(join(repoDir, "src/test.ts"));
+				const content = await file.text();
+				expect(content).toBe("feature content\n");
+			} finally {
+				await cleanupTempDir(repoDir);
+			}
 		});
 	});
 
 	describe("Tier 3: AI-resolve", () => {
-		/**
-		 * Create a delete/modify conflict: file is deleted on main but modified on
-		 * the feature branch. This produces a conflict with NO conflict markers in
-		 * the working copy, causing Tier 2 auto-resolve to fail (resolveConflictsKeepIncoming
-		 * returns null). This naturally escalates to Tier 3 or 4.
-		 */
-		async function setupDeleteModifyConflict(dir: string): Promise<void> {
-			// Create file on main
-			await commitFile(dir, "src/test.ts", "original content\n");
+		// After the first test (aiResolve=false), the resolver aborts the merge and
+		// leaves the repo clean. The second test can retry the merge on the same repo.
+		let repoDir: string;
 
-			// Create feature branch and modify the file
-			await runGitInDir(dir, ["checkout", "-b", "feature-branch"]);
-			await commitFile(dir, "src/test.ts", "modified by agent\n");
-
-			// Switch back to main and delete the file
-			await runGitInDir(dir, ["checkout", "main"]);
-			await runGitInDir(dir, ["rm", "src/test.ts"]);
-			await runGitInDir(dir, ["commit", "-m", "delete src/test.ts"]);
-		}
-
-		test("is skipped when aiResolveEnabled is false", async () => {
+		beforeAll(async () => {
+			repoDir = await createTempGitRepo();
 			await setupDeleteModifyConflict(repoDir);
+		});
 
+		afterAll(async () => {
+			await cleanupTempDir(repoDir);
+		});
+
+		// This test MUST run first -- it fails to merge and aborts, leaving repo clean
+		test("is skipped when aiResolveEnabled is false", async () => {
 			const entry = makeTestEntry({
 				branchName: "feature-branch",
 				filesModified: ["src/test.ts"],
@@ -244,11 +253,9 @@ describe("createMergeResolver", () => {
 			expect(result.entry.status).toBe("failed");
 		});
 
+		// This test runs second -- repo is clean from the abort, same conflict is available
 		test("invokes claude when aiResolveEnabled is true and tier 2 fails", async () => {
-			await setupDeleteModifyConflict(repoDir);
-
 			// Selective spy: mock only claude, let git commands through.
-			// We need to save a reference to the real Bun.spawn before spying.
 			const originalSpawn = Bun.spawn;
 			let claudeCalled = false;
 
@@ -288,31 +295,21 @@ describe("createMergeResolver", () => {
 	});
 
 	describe("Tier 4: Re-imagine", () => {
-		/**
-		 * Set up a scenario where Tier 2 auto-resolve fails but Tier 4 reimagine can
-		 * succeed. We create a delete/modify conflict on one file (causes Tier 2 to fail)
-		 * and set entry.filesModified to a different file that exists on both branches
-		 * (so git show works for both in reimagine).
-		 */
-		async function setupReimagineScenario(dir: string): Promise<void> {
-			// Create two files on main
-			await commitFile(dir, "src/conflict-file.ts", "original content\n");
-			await commitFile(dir, "src/reimagine-target.ts", "main version of target\n");
+		// After the first test (reimagine=false), the resolver aborts the merge and
+		// leaves the repo clean. The second test can retry the merge on the same repo.
+		let repoDir: string;
 
-			// Create feature branch: modify both files
-			await runGitInDir(dir, ["checkout", "-b", "feature-branch"]);
-			await commitFile(dir, "src/conflict-file.ts", "modified by agent\n");
-			await commitFile(dir, "src/reimagine-target.ts", "feature version of target\n");
-
-			// Switch back to main: delete the conflict file (causes delete/modify conflict)
-			await runGitInDir(dir, ["checkout", "main"]);
-			await runGitInDir(dir, ["rm", "src/conflict-file.ts"]);
-			await runGitInDir(dir, ["commit", "-m", "delete conflict file"]);
-		}
-
-		test("is skipped when reimagineEnabled is false", async () => {
+		beforeAll(async () => {
+			repoDir = await createTempGitRepo();
 			await setupReimagineScenario(repoDir);
+		});
 
+		afterAll(async () => {
+			await cleanupTempDir(repoDir);
+		});
+
+		// This test MUST run first -- it fails to merge and aborts, leaving repo clean
+		test("is skipped when reimagineEnabled is false", async () => {
 			const entry = makeTestEntry({
 				branchName: "feature-branch",
 				filesModified: ["src/reimagine-target.ts"],
@@ -329,9 +326,8 @@ describe("createMergeResolver", () => {
 			expect(result.entry.status).toBe("failed");
 		});
 
+		// This test runs second -- repo is clean from the abort, same conflict is available
 		test("aborts merge and reimplements when reimagineEnabled is true", async () => {
-			await setupReimagineScenario(repoDir);
-
 			// Selective spy: mock only claude, let git commands through.
 			const originalSpawn = Bun.spawn;
 			let claudeCalled = false;
@@ -377,66 +373,51 @@ describe("createMergeResolver", () => {
 	});
 
 	describe("All tiers fail", () => {
-		test("returns failed status when all tiers are disabled or fail", async () => {
-			// Create a delete/modify conflict that auto-resolve cannot handle
-			await commitFile(repoDir, "src/test.ts", "original content\n");
-			await runGitInDir(repoDir, ["checkout", "-b", "feature-branch"]);
-			await commitFile(repoDir, "src/test.ts", "modified by agent\n");
-			await runGitInDir(repoDir, ["checkout", "main"]);
-			await runGitInDir(repoDir, ["rm", "src/test.ts"]);
-			await runGitInDir(repoDir, ["commit", "-m", "delete src/test.ts"]);
+		test("returns failed status and repo is clean when all tiers fail", async () => {
+			const repoDir = await createTempGitRepo();
+			try {
+				await setupDeleteModifyConflict(repoDir);
 
-			const entry = makeTestEntry({
-				branchName: "feature-branch",
-				filesModified: ["src/test.ts"],
-			});
+				const entry = makeTestEntry({
+					branchName: "feature-branch",
+					filesModified: ["src/test.ts"],
+				});
 
-			const resolver = createMergeResolver({
-				aiResolveEnabled: false,
-				reimagineEnabled: false,
-			});
+				const resolver = createMergeResolver({
+					aiResolveEnabled: false,
+					reimagineEnabled: false,
+				});
 
-			const result = await resolver.resolve(entry, "main", repoDir);
+				const result = await resolver.resolve(entry, "main", repoDir);
 
-			expect(result.success).toBe(false);
-			expect(result.entry.status).toBe("failed");
-			expect(result.entry.resolvedTier).toBeNull();
-			expect(result.errorMessage).not.toBeNull();
-			expect(result.errorMessage).toContain("failed");
-		});
+				expect(result.success).toBe(false);
+				expect(result.entry.status).toBe("failed");
+				expect(result.entry.resolvedTier).toBeNull();
+				expect(result.errorMessage).not.toBeNull();
+				expect(result.errorMessage).toContain("failed");
 
-		test("repo is clean after total failure (merge aborted)", async () => {
-			await commitFile(repoDir, "src/test.ts", "original content\n");
-			await runGitInDir(repoDir, ["checkout", "-b", "feature-branch"]);
-			await commitFile(repoDir, "src/test.ts", "modified by agent\n");
-			await runGitInDir(repoDir, ["checkout", "main"]);
-			await runGitInDir(repoDir, ["rm", "src/test.ts"]);
-			await runGitInDir(repoDir, ["commit", "-m", "delete src/test.ts"]);
-
-			const entry = makeTestEntry({
-				branchName: "feature-branch",
-				filesModified: ["src/test.ts"],
-			});
-
-			const resolver = createMergeResolver({
-				aiResolveEnabled: false,
-				reimagineEnabled: false,
-			});
-
-			await resolver.resolve(entry, "main", repoDir);
-
-			// Verify the repo is in a clean state (merge was aborted)
-			const status = await runGitInDir(repoDir, ["status", "--porcelain"]);
-			expect(status.trim()).toBe("");
+				// Verify the repo is in a clean state (merge was aborted)
+				const status = await runGitInDir(repoDir, ["status", "--porcelain"]);
+				expect(status.trim()).toBe("");
+			} finally {
+				await cleanupTempDir(repoDir);
+			}
 		});
 	});
 
 	describe("result shape", () => {
+		let repoDir: string;
+
+		beforeEach(async () => {
+			repoDir = await createTempGitRepo();
+		});
+
+		afterEach(async () => {
+			await cleanupTempDir(repoDir);
+		});
+
 		test("successful result has correct MergeResult shape", async () => {
-			await commitFile(repoDir, "src/main-file.ts", "main content\n");
-			await runGitInDir(repoDir, ["checkout", "-b", "feature-branch"]);
-			await commitFile(repoDir, "src/feature-file.ts", "feature content\n");
-			await runGitInDir(repoDir, ["checkout", "main"]);
+			await setupCleanMerge(repoDir);
 
 			const resolver = createMergeResolver({
 				aiResolveEnabled: false,
@@ -460,13 +441,7 @@ describe("createMergeResolver", () => {
 		});
 
 		test("failed result preserves original entry fields", async () => {
-			// Create a conflict that cannot be auto-resolved
-			await commitFile(repoDir, "src/test.ts", "original content\n");
-			await runGitInDir(repoDir, ["checkout", "-b", "overstory/my-agent/bead-xyz"]);
-			await commitFile(repoDir, "src/test.ts", "modified by agent\n");
-			await runGitInDir(repoDir, ["checkout", "main"]);
-			await runGitInDir(repoDir, ["rm", "src/test.ts"]);
-			await runGitInDir(repoDir, ["commit", "-m", "delete src/test.ts"]);
+			await setupDeleteModifyConflict(repoDir, "overstory/my-agent/bead-xyz");
 
 			const entry = makeTestEntry({
 				branchName: "overstory/my-agent/bead-xyz",

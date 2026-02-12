@@ -4,24 +4,51 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * Create a temporary directory with a real git repo initialized.
- * Includes an initial commit so branches can be created immediately.
- *
- * @returns The absolute path to the temp git repo.
+ * Git environment variables for test repos.
+ * Using env vars instead of per-repo `git config` eliminates 2 subprocess
+ * spawns per repo creation.
  */
-export async function createTempGitRepo(): Promise<string> {
-	const dir = await mkdtemp(join(tmpdir(), "overstory-test-"));
+const GIT_TEST_ENV = {
+	GIT_AUTHOR_NAME: "Overstory Test",
+	GIT_AUTHOR_EMAIL: "test@overstory.dev",
+	GIT_COMMITTER_NAME: "Overstory Test",
+	GIT_COMMITTER_EMAIL: "test@overstory.dev",
+};
 
-	// Initialize git repo
+/** Cached template repo path. Created lazily on first call. */
+let _templateDir: string | null = null;
+
+/**
+ * Get or create a template git repo with an initial commit.
+ * All test repos clone from this template (1 subprocess instead of 5).
+ */
+async function getTemplateRepo(): Promise<string> {
+	if (_templateDir) return _templateDir;
+
+	const dir = await mkdtemp(join(tmpdir(), "overstory-template-"));
 	await runGitInDir(dir, ["init"]);
-	await runGitInDir(dir, ["config", "user.email", "test@overstory.dev"]);
-	await runGitInDir(dir, ["config", "user.name", "Overstory Test"]);
-
-	// Create initial commit (git worktree requires at least one commit)
 	await Bun.write(join(dir, ".gitkeep"), "");
 	await runGitInDir(dir, ["add", ".gitkeep"]);
 	await runGitInDir(dir, ["commit", "-m", "initial commit"]);
 
+	_templateDir = dir;
+	return dir;
+}
+
+/**
+ * Create a temporary directory with a real git repo initialized.
+ * Includes an initial commit so branches can be created immediately.
+ *
+ * Uses a cached template repo + `git clone --local` for speed:
+ * 1 subprocess per call instead of 5.
+ *
+ * @returns The absolute path to the temp git repo.
+ */
+export async function createTempGitRepo(): Promise<string> {
+	const template = await getTemplateRepo();
+	const dir = await mkdtemp(join(tmpdir(), "overstory-test-"));
+	// Clone into the empty dir. Avoid --local (hardlinks trigger EFAULT in Bun's rm).
+	await runGitInDir(".", ["clone", template, dir]);
 	return dir;
 }
 
@@ -60,12 +87,14 @@ export async function cleanupTempDir(dir: string): Promise<void> {
 
 /**
  * Run a git command in the given directory. Throws on non-zero exit.
+ * Passes GIT_AUTHOR/COMMITTER env vars so repos don't need per-repo config.
  */
 export async function runGitInDir(cwd: string, args: string[]): Promise<string> {
 	const proc = Bun.spawn(["git", ...args], {
 		cwd,
 		stdout: "pipe",
 		stderr: "pipe",
+		env: { ...process.env, ...GIT_TEST_ENV },
 	});
 
 	const [stdout, stderr, exitCode] = await Promise.all([

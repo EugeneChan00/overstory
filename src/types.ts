@@ -58,6 +58,12 @@ export interface AgentDefinition {
 	constraints: string[]; // Machine-readable restrictions
 }
 
+/** All valid agent capability types. Used for compile-time validation. */
+export const SUPPORTED_CAPABILITIES = ["scout", "builder", "reviewer", "lead", "merger"] as const;
+
+/** Union type derived from the capabilities constant. */
+export type Capability = (typeof SUPPORTED_CAPABILITIES)[number];
+
 // === Agent Session ===
 
 export type AgentState = "booting" | "working" | "completed" | "stalled" | "zombie";

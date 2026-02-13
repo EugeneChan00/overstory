@@ -11,9 +11,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
 import { createMailStore } from "../mail/store.ts";
 import { createMetricsStore } from "../metrics/store.ts";
+import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
 import type { AgentSession } from "../types.ts";
 import { cleanCommand } from "./clean.ts";
 
@@ -21,7 +21,7 @@ let tempDir: string;
 let overstoryDir: string;
 let originalCwd: string;
 let stdoutOutput: string;
-let stderrOutput: string;
+let _stderrOutput: string;
 let originalStdoutWrite: typeof process.stdout.write;
 let originalStderrWrite: typeof process.stderr.write;
 
@@ -47,7 +47,7 @@ beforeEach(async () => {
 
 	// Capture stdout/stderr
 	stdoutOutput = "";
-	stderrOutput = "";
+	_stderrOutput = "";
 	originalStdoutWrite = process.stdout.write;
 	originalStderrWrite = process.stderr.write;
 	process.stdout.write = ((chunk: string) => {
@@ -55,7 +55,7 @@ beforeEach(async () => {
 		return true;
 	}) as typeof process.stdout.write;
 	process.stderr.write = ((chunk: string) => {
-		stderrOutput += chunk;
+		_stderrOutput += chunk;
 		return true;
 	}) as typeof process.stderr.write;
 });

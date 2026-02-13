@@ -49,6 +49,11 @@ export async function createTempGitRepo(): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "overstory-test-"));
 	// Clone into the empty dir. Avoid --local (hardlinks trigger EFAULT in Bun's rm).
 	await runGitInDir(".", ["clone", template, dir]);
+	// Set git identity at repo level so code that doesn't use GIT_TEST_ENV
+	// (e.g., resolver's runGit) can still commit. Locally this is covered by
+	// ~/.gitconfig, but CI runners have no global git identity.
+	await runGitInDir(dir, ["config", "user.name", "Overstory Test"]);
+	await runGitInDir(dir, ["config", "user.email", "test@overstory.dev"]);
 	return dir;
 }
 

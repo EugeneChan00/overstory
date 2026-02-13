@@ -145,6 +145,10 @@ describe("printToConsole", () => {
 	test("sends info events to console.log", () => {
 		logSpy = spyOn(console, "log").mockImplementation(() => {});
 		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		// Clear any calls captured during spy setup (bun's test reporter
+		// may flush output through console.log between spy creation and here)
+		logSpy.mockClear();
+		errorSpy.mockClear();
 
 		printToConsole(makeEvent({ level: "info" }), true);
 
@@ -155,6 +159,8 @@ describe("printToConsole", () => {
 	test("sends warn events to console.log", () => {
 		logSpy = spyOn(console, "log").mockImplementation(() => {});
 		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		logSpy.mockClear();
+		errorSpy.mockClear();
 
 		printToConsole(makeEvent({ level: "warn" }), false);
 
@@ -165,6 +171,8 @@ describe("printToConsole", () => {
 	test("sends error events to console.error", () => {
 		logSpy = spyOn(console, "log").mockImplementation(() => {});
 		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		logSpy.mockClear();
+		errorSpy.mockClear();
 
 		printToConsole(makeEvent({ level: "error" }), false);
 
@@ -175,6 +183,8 @@ describe("printToConsole", () => {
 	test("suppresses debug events when verbose is false", () => {
 		logSpy = spyOn(console, "log").mockImplementation(() => {});
 		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		logSpy.mockClear();
+		errorSpy.mockClear();
 
 		printToConsole(makeEvent({ level: "debug" }), false);
 
@@ -185,6 +195,8 @@ describe("printToConsole", () => {
 	test("shows debug events when verbose is true", () => {
 		logSpy = spyOn(console, "log").mockImplementation(() => {});
 		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		logSpy.mockClear();
+		errorSpy.mockClear();
 
 		printToConsole(makeEvent({ level: "debug" }), true);
 

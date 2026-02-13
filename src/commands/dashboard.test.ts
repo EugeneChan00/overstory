@@ -7,24 +7,31 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ValidationError } from "../errors.ts";
 import { dashboardCommand } from "./dashboard.ts";
 
 describe("dashboardCommand", () => {
 	let chunks: string[];
 	let originalWrite: typeof process.stdout.write;
+	let tempDir: string;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		chunks = [];
 		originalWrite = process.stdout.write;
 		process.stdout.write = ((chunk: string) => {
 			chunks.push(chunk);
 			return true;
 		}) as typeof process.stdout.write;
+
+		tempDir = await mkdtemp(join(tmpdir(), "dashboard-test-"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		process.stdout.write = originalWrite;
+		await rm(tempDir, { recursive: true, force: true });
 	});
 
 	function output(): string {
@@ -63,27 +70,25 @@ describe("dashboardCommand", () => {
 
 	test("--interval at exactly 500 passes validation", async () => {
 		// This test verifies that interval validation passes for the value 500.
-		// The command may fail later (e.g., loadConfig), or in our test environment
-		// it might even start the polling loop (since we're in the overstory repo).
-		// Either way, we just verify it doesn't throw a ValidationError about interval.
+		// We chdir to a temp dir WITHOUT .overstory/config.yaml so that loadConfig()
+		// throws BEFORE the infinite while loop starts. This proves validation passed
+		// (no ValidationError about interval) while preventing the loop from leaking.
 
-		// Set up a promise that rejects with a timeout error after 100ms
-		const timeoutPromise = new Promise<never>((_, reject) => {
-			setTimeout(() => reject(new Error("TIMEOUT")), 100);
-		});
+		const originalCwd = process.cwd();
 
 		try {
-			// Race the command against a timeout
-			await Promise.race([dashboardCommand(["--interval", "500"]), timeoutPromise]);
+			process.chdir(tempDir);
+			await dashboardCommand(["--interval", "500"]);
 		} catch (err) {
 			// If it's a ValidationError about interval, the test should fail
 			if (err instanceof ValidationError && err.field === "interval") {
 				throw new Error("Interval validation should have passed for value 500");
 			}
-			// TIMEOUT error means the command started running (validation passed) - this is good
-			// Other errors (like from loadConfig) are also fine - they occur after validation
+			// Other errors (like from loadConfig) are expected - they occur after validation passed
+		} finally {
+			process.chdir(originalCwd);
 		}
 
-		// If we reach here without throwing, validation passed
+		// If we reach here without throwing a ValidationError about interval, validation passed
 	});
 });

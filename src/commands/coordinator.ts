@@ -14,7 +14,6 @@
 
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
@@ -26,6 +25,21 @@ const COORDINATOR_NAME = "coordinator";
 
 /** Tmux session name for the coordinator. */
 const TMUX_SESSION = `overstory-${COORDINATOR_NAME}`;
+
+/** Dependency injection for testing. Uses real implementations when omitted. */
+export interface CoordinatorDeps {
+	_tmux?: {
+		createSession: (
+			name: string,
+			cwd: string,
+			command: string,
+			env?: Record<string, string>,
+		) => Promise<number>;
+		isSessionAlive: (name: string) => Promise<boolean>;
+		killSession: (name: string) => Promise<void>;
+		sendKeys: (name: string, keys: string) => Promise<void>;
+	};
+}
 
 /**
  * Load sessions registry from .overstory/sessions.json.
@@ -82,11 +96,13 @@ export function buildCoordinatorBeacon(): string {
  *
  * 1. Verify no coordinator is already running
  * 2. Load config
- * 3. Deploy hooks to project root's .claude/ (coordinator-specific guards)
- * 4. Create agent identity (if first time)
- * 5. Spawn tmux session at project root with Claude Code
- * 6. Send startup beacon
- * 7. Record session in sessions.json
+ * 3. Create agent identity (if first time)
+ * 4. Spawn tmux session at project root with Claude Code
+ * 5. Send startup beacon
+ * 6. Record session in sessions.json
+ *
+ * Note: Hooks are NOT deployed to the project root. Orchestrator hooks
+ * are managed separately via `overstory hooks install`.
  */
 /**
  * Determine whether to auto-attach to the tmux session after starting.
@@ -98,7 +114,9 @@ export function resolveAttach(args: string[], isTTY: boolean): boolean {
 	return isTTY;
 }
 
-async function startCoordinator(args: string[]): Promise<void> {
+async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Promise<void> {
+	const tmux = deps._tmux ?? { createSession, isSessionAlive, killSession, sendKeys };
+
 	const json = args.includes("--json");
 	const shouldAttach = resolveAttach(args, !!process.stdout.isTTY);
 	const cwd = process.cwd();
@@ -111,7 +129,7 @@ async function startCoordinator(args: string[]): Promise<void> {
 	const existing = findCoordinatorSession(sessions);
 
 	if (existing) {
-		const alive = await isSessionAlive(existing.tmuxSession);
+		const alive = await tmux.isSessionAlive(existing.tmuxSession);
 		if (alive) {
 			throw new AgentError(
 				`Coordinator is already running (tmux: ${existing.tmuxSession}, since: ${existing.startedAt})`,
@@ -123,10 +141,10 @@ async function startCoordinator(args: string[]): Promise<void> {
 		await saveSessions(sessionsPath, sessions);
 	}
 
-	// Deploy coordinator-specific hooks to the project root's .claude/ directory.
-	// The coordinator gets the same structural enforcement as other non-implementation
-	// agents (Write/Edit/NotebookEdit blocked, dangerous bash commands blocked).
-	await deployHooks(projectRoot, COORDINATOR_NAME, "coordinator");
+	// Hooks are NOT deployed here. The orchestrator's hooks live in
+	// .overstory/hooks.json and are installed to .claude/ via `overstory hooks install`.
+	// The coordinator agent relies on instruction-based enforcement (beacon + role)
+	// rather than hook-based guards, avoiding pollution of the project root's .claude/.
 
 	// Create coordinator identity if first run
 	const identityBaseDir = join(projectRoot, ".overstory", "agents");
@@ -145,7 +163,7 @@ async function startCoordinator(args: string[]): Promise<void> {
 
 	// Spawn tmux session at project root with Claude Code (interactive mode)
 	const claudeCmd = "claude --model opus --dangerously-skip-permissions";
-	const pid = await createSession(TMUX_SESSION, projectRoot, claudeCmd, {
+	const pid = await tmux.createSession(TMUX_SESSION, projectRoot, claudeCmd, {
 		OVERSTORY_AGENT_NAME: COORDINATOR_NAME,
 	});
 
@@ -177,11 +195,11 @@ async function startCoordinator(args: string[]): Promise<void> {
 	// Send beacon after TUI initialization delay
 	await Bun.sleep(3_000);
 	const beacon = buildCoordinatorBeacon();
-	await sendKeys(TMUX_SESSION, beacon);
+	await tmux.sendKeys(TMUX_SESSION, beacon);
 
 	// Follow-up Enter to ensure submission (same pattern as sling.ts)
 	await Bun.sleep(500);
-	await sendKeys(TMUX_SESSION, "");
+	await tmux.sendKeys(TMUX_SESSION, "");
 
 	const output = {
 		agentName: COORDINATOR_NAME,
@@ -214,7 +232,9 @@ async function startCoordinator(args: string[]): Promise<void> {
  * 2. Kill the tmux session (with process tree cleanup)
  * 3. Mark session as completed in sessions.json
  */
-async function stopCoordinator(args: string[]): Promise<void> {
+async function stopCoordinator(args: string[], deps: CoordinatorDeps = {}): Promise<void> {
+	const tmux = deps._tmux ?? { createSession, isSessionAlive, killSession, sendKeys };
+
 	const json = args.includes("--json");
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
@@ -231,9 +251,9 @@ async function stopCoordinator(args: string[]): Promise<void> {
 	}
 
 	// Kill tmux session with process tree cleanup
-	const alive = await isSessionAlive(session.tmuxSession);
+	const alive = await tmux.isSessionAlive(session.tmuxSession);
 	if (alive) {
-		await killSession(session.tmuxSession);
+		await tmux.killSession(session.tmuxSession);
 	}
 
 	// Update session state
@@ -253,7 +273,9 @@ async function stopCoordinator(args: string[]): Promise<void> {
  *
  * Checks session registry and tmux liveness to report actual state.
  */
-async function statusCoordinator(args: string[]): Promise<void> {
+async function statusCoordinator(args: string[], deps: CoordinatorDeps = {}): Promise<void> {
+	const tmux = deps._tmux ?? { createSession, isSessionAlive, killSession, sendKeys };
+
 	const json = args.includes("--json");
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
@@ -272,7 +294,7 @@ async function statusCoordinator(args: string[]): Promise<void> {
 		return;
 	}
 
-	const alive = await isSessionAlive(session.tmuxSession);
+	const alive = await tmux.isSessionAlive(session.tmuxSession);
 
 	// Reconcile state: if session says active but tmux is dead, update
 	if (!alive && session.state !== "completed" && session.state !== "zombie") {
@@ -330,8 +352,14 @@ The coordinator runs at the project root and orchestrates work by:
 
 /**
  * Entry point for `overstory coordinator <subcommand>`.
+ *
+ * @param args - CLI arguments after "coordinator"
+ * @param deps - Optional dependency injection for testing (tmux)
  */
-export async function coordinatorCommand(args: string[]): Promise<void> {
+export async function coordinatorCommand(
+	args: string[],
+	deps: CoordinatorDeps = {},
+): Promise<void> {
 	if (args.includes("--help") || args.includes("-h") || args.length === 0) {
 		process.stdout.write(`${COORDINATOR_HELP}\n`);
 		return;
@@ -342,13 +370,13 @@ export async function coordinatorCommand(args: string[]): Promise<void> {
 
 	switch (subcommand) {
 		case "start":
-			await startCoordinator(subArgs);
+			await startCoordinator(subArgs, deps);
 			break;
 		case "stop":
-			await stopCoordinator(subArgs);
+			await stopCoordinator(subArgs, deps);
 			break;
 		case "status":
-			await statusCoordinator(subArgs);
+			await statusCoordinator(subArgs, deps);
 			break;
 		default:
 			throw new ValidationError(

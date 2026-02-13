@@ -9,6 +9,7 @@
 import { coordinatorCommand } from "./commands/coordinator.ts";
 import { dashboardCommand } from "./commands/dashboard.ts";
 import { groupCommand } from "./commands/group.ts";
+import { hooksCommand } from "./commands/hooks.ts";
 import { initCommand } from "./commands/init.ts";
 import { logCommand } from "./commands/log.ts";
 import { mailCommand } from "./commands/mail.ts";
@@ -38,6 +39,7 @@ Commands:
   dashboard               Live TUI dashboard for agent monitoring
   coordinator <sub>       Persistent coordinator agent (start/stop/status)
   supervisor <sub>        Per-project supervisor agent (start/stop/status)
+  hooks <sub>             Manage orchestrator hooks (install/uninstall/status)
   mail <sub>              Mail system (send/check/list/read/reply)
   monitor <sub>           Tier 2 monitor agent (start/stop/status)
   merge                   Merge agent branches into canonical
@@ -62,6 +64,7 @@ const COMMANDS = [
 	"dashboard",
 	"coordinator",
 	"supervisor",
+	"hooks",
 	"monitor",
 	"mail",
 	"merge",
@@ -142,6 +145,9 @@ async function main(): Promise<void> {
 			break;
 		case "supervisor":
 			await supervisorCommand(commandArgs);
+			break;
+		case "hooks":
+			await hooksCommand(commandArgs);
 			break;
 		case "monitor":
 			await monitorCommand(commandArgs);

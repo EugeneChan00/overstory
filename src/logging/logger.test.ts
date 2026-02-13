@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../types.ts";
@@ -31,18 +31,37 @@ describe("createLogger", () => {
 			.map((line) => JSON.parse(line) as LogEvent);
 	}
 
-	test("creates log directory on first write", async () => {
-		const logger = createLogger({ logDir, agentName: "test-agent" });
+	async function fileExists(filePath: string): Promise<boolean> {
+		try {
+			await access(filePath);
+			return true;
+		} catch {
+			return false;
+		}
+	}
 
-		logger.info("test.event");
+	describe("lazy directory creation", () => {
+		test("does not create log directory until first write", async () => {
+			createLogger({ logDir, agentName: "test-agent" });
 
-		// Give time for async mkdir + append to complete
-		await Bun.sleep(50);
+			// Directory should NOT exist yet -- no write has been issued
+			const exists = await fileExists(logDir);
+			expect(exists).toBe(false);
+		});
 
-		const files = await readdir(logDir);
-		expect(files.length).toBeGreaterThan(0);
+		test("creates log directory on first write", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
 
-		logger.close();
+			logger.info("test.event");
+
+			// Give time for async mkdir + append to complete
+			await Bun.sleep(50);
+
+			const files = await readdir(logDir);
+			expect(files.length).toBeGreaterThan(0);
+
+			logger.close();
+		});
 	});
 
 	describe("info", () => {
@@ -62,6 +81,19 @@ describe("createLogger", () => {
 			expect(events[0]?.level).toBe("info");
 			expect(events[0]?.event).toBe("test.event");
 			expect(events[0]?.data.key).toBe("value");
+
+			logger.close();
+		});
+
+		test("does not write to errors.log", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.info("happy.path");
+
+			await Bun.sleep(50);
+
+			const exists = await fileExists(join(logDir, "errors.log"));
+			expect(exists).toBe(false);
 
 			logger.close();
 		});
@@ -98,6 +130,19 @@ describe("createLogger", () => {
 			const events = await readJsonLines("events.ndjson");
 			expect(events[0]?.level).toBe("warn");
 			expect(events[0]?.event).toBe("rate.limit");
+
+			logger.close();
+		});
+
+		test("does not write to errors.log", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.warn("just.a.warning");
+
+			await Bun.sleep(50);
+
+			const exists = await fileExists(join(logDir, "errors.log"));
+			expect(exists).toBe(false);
 
 			logger.close();
 		});
@@ -162,6 +207,19 @@ describe("createLogger", () => {
 
 			logger.close();
 		});
+
+		test("does not write to errors.log", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.debug("trace.detail");
+
+			await Bun.sleep(50);
+
+			const exists = await fileExists(join(logDir, "errors.log"));
+			expect(exists).toBe(false);
+
+			logger.close();
+		});
 	});
 
 	describe("toolStart and toolEnd", () => {
@@ -199,6 +257,20 @@ describe("createLogger", () => {
 			logger.close();
 		});
 
+		test("toolStart includes args in tool event data", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.toolStart("Bash", { command: "ls -la", cwd: "/tmp" });
+
+			await Bun.sleep(50);
+
+			const tools = await readJsonLines("tools.ndjson");
+			const startEvent = tools.find((t) => t.event === "tool.start");
+			expect(startEvent?.data.args).toEqual({ command: "ls -la", cwd: "/tmp" });
+
+			logger.close();
+		});
+
 		test("toolEnd works without result", async () => {
 			const logger = createLogger({ logDir, agentName: "test-agent" });
 
@@ -208,6 +280,20 @@ describe("createLogger", () => {
 
 			const tools = await readJsonLines("tools.ndjson");
 			expect(tools[0]?.data.result).toBeUndefined();
+
+			logger.close();
+		});
+
+		test("does not write to errors.log", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.toolStart("Bash", { command: "echo test" });
+			logger.toolEnd("Bash", 10);
+
+			await Bun.sleep(50);
+
+			const exists = await fileExists(join(logDir, "errors.log"));
+			expect(exists).toBe(false);
 
 			logger.close();
 		});
@@ -223,6 +309,20 @@ describe("createLogger", () => {
 
 			const events = await readJsonLines("events.ndjson");
 			expect(events[0]?.data.apiKey).toBe("[REDACTED]");
+
+			logger.close();
+		});
+
+		test("redacts secrets in session.log", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.info("api.call", { token: "ghp_abc123xyz" });
+
+			await Bun.sleep(50);
+
+			const sessionLog = await readLogFile("session.log");
+			expect(sessionLog).toContain("[REDACTED]");
+			expect(sessionLog).not.toContain("ghp_abc123xyz");
 
 			logger.close();
 		});
@@ -267,6 +367,41 @@ describe("createLogger", () => {
 
 			const events = await readJsonLines("events.ndjson");
 			expect(events[0]?.data.apiKey).toBe("sk-ant-secret123");
+
+			logger.close();
+		});
+
+		test("does not redact when redactSecrets is false for error messages", async () => {
+			const logger = createLogger({
+				logDir,
+				agentName: "test-agent",
+				redactSecrets: false,
+			});
+
+			const error = new Error("Key is sk-ant-secret123");
+			logger.error("err", error);
+
+			await Bun.sleep(50);
+
+			const events = await readJsonLines("events.ndjson");
+			expect(events[0]?.data.errorMessage).toBe("Key is sk-ant-secret123");
+
+			logger.close();
+		});
+
+		test("does not redact when redactSecrets is false for tool results", async () => {
+			const logger = createLogger({
+				logDir,
+				agentName: "test-agent",
+				redactSecrets: false,
+			});
+
+			logger.toolEnd("Bash", 10, "Bearer my-token-value");
+
+			await Bun.sleep(50);
+
+			const tools = await readJsonLines("tools.ndjson");
+			expect(tools[0]?.data.result).toBe("Bearer my-token-value");
 
 			logger.close();
 		});
@@ -346,8 +481,39 @@ describe("createLogger", () => {
 			// Should only have the event before close
 			expect(events).toHaveLength(1);
 			expect(events[0]?.event).toBe("before.close");
+		});
+
+		test("prevents tool writes after close", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.toolStart("Read", { path: "/tmp/a" });
+			await Bun.sleep(50);
 
 			logger.close();
+
+			logger.toolStart("Read", { path: "/tmp/b" });
+			logger.toolEnd("Read", 100);
+			await Bun.sleep(50);
+
+			const tools = await readJsonLines("tools.ndjson");
+			expect(tools).toHaveLength(1);
+			expect(tools[0]?.event).toBe("tool.start");
+		});
+
+		test("prevents error writes after close", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.error("first.error", new Error("before"));
+			await Bun.sleep(50);
+
+			logger.close();
+
+			logger.error("second.error", new Error("after"));
+			await Bun.sleep(50);
+
+			const events = await readJsonLines("events.ndjson");
+			expect(events).toHaveLength(1);
+			expect(events[0]?.event).toBe("first.error");
 		});
 	});
 
@@ -364,6 +530,32 @@ describe("createLogger", () => {
 
 			logger.close();
 		});
+
+		test("includes agentName in tool events", async () => {
+			const logger = createLogger({ logDir, agentName: "builder-3" });
+
+			logger.toolStart("Write", { path: "/tmp/out" });
+
+			await Bun.sleep(50);
+
+			const tools = await readJsonLines("tools.ndjson");
+			expect(tools[0]?.agentName).toBe("builder-3");
+
+			logger.close();
+		});
+
+		test("includes agentName in errors.log", async () => {
+			const logger = createLogger({ logDir, agentName: "merger-2" });
+
+			logger.error("merge.failed", new Error("conflict"));
+
+			await Bun.sleep(50);
+
+			const errorsLog = await readLogFile("errors.log");
+			expect(errorsLog).toContain("Agent:     merger-2");
+
+			logger.close();
+		});
 	});
 
 	describe("error isolation", () => {
@@ -376,13 +568,15 @@ describe("createLogger", () => {
 			expect(() => logger.info("test1")).not.toThrow();
 			expect(() => logger.error("test2", new Error("test"))).not.toThrow();
 			expect(() => logger.debug("test3")).not.toThrow();
+			expect(() => logger.toolStart("Bash", { cmd: "ls" })).not.toThrow();
+			expect(() => logger.toolEnd("Bash", 10)).not.toThrow();
 
 			logger.close();
 		});
 	});
 
-	describe("file format", () => {
-		test("session.log uses human-readable format", async () => {
+	describe("session.log format", () => {
+		test("uses [ISO_TIMESTAMP] LEVEL event key=value format", async () => {
 			const logger = createLogger({ logDir, agentName: "test-agent" });
 
 			logger.info("task.completed", { taskId: "task-123", duration: 5000 });
@@ -390,7 +584,7 @@ describe("createLogger", () => {
 			await Bun.sleep(50);
 
 			const sessionLog = await readLogFile("session.log");
-			// Format: [TIMESTAMP] LEVEL EVENT key=value key=value
+			// Format: [TIMESTAMP] LEVEL EVENT key=value key=value\n
 			expect(sessionLog).toMatch(/\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]/);
 			expect(sessionLog).toContain("INFO task.completed");
 			expect(sessionLog).toContain("taskId=task-123");
@@ -399,7 +593,113 @@ describe("createLogger", () => {
 			logger.close();
 		});
 
-		test("events.ndjson uses valid NDJSON format", async () => {
+		test("quotes string values containing spaces", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.info("deploy.start", { env: "production west" });
+
+			await Bun.sleep(50);
+
+			const sessionLog = await readLogFile("session.log");
+			expect(sessionLog).toContain('env="production west"');
+
+			logger.close();
+		});
+
+		test("renders null and undefined values as key=null", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.info("check.result", { passed: null, detail: undefined });
+
+			await Bun.sleep(50);
+
+			const sessionLog = await readLogFile("session.log");
+			expect(sessionLog).toContain("passed=null");
+			expect(sessionLog).toContain("detail=null");
+
+			logger.close();
+		});
+
+		test("JSON stringifies object values", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.info("config.loaded", { options: { retries: 3, timeout: 1000 } });
+
+			await Bun.sleep(50);
+
+			const sessionLog = await readLogFile("session.log");
+			expect(sessionLog).toContain('options={"retries":3,"timeout":1000}');
+
+			logger.close();
+		});
+
+		test("renders simple string values without quotes", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.info("agent.started", { name: "scout-1" });
+
+			await Bun.sleep(50);
+
+			const sessionLog = await readLogFile("session.log");
+			expect(sessionLog).toContain("name=scout-1");
+			// Should NOT be quoted since there are no spaces
+			expect(sessionLog).not.toContain('name="scout-1"');
+
+			logger.close();
+		});
+
+		test("renders boolean values", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.info("feature.flag", { enabled: true, deprecated: false });
+
+			await Bun.sleep(50);
+
+			const sessionLog = await readLogFile("session.log");
+			expect(sessionLog).toContain("enabled=true");
+			expect(sessionLog).toContain("deprecated=false");
+
+			logger.close();
+		});
+
+		test("renders event without key=value suffix when data is empty", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.info("heartbeat");
+
+			await Bun.sleep(50);
+
+			const sessionLog = await readLogFile("session.log");
+			// Should end with just the event name and newline, no trailing space
+			expect(sessionLog).toMatch(/INFO heartbeat\n$/);
+
+			logger.close();
+		});
+	});
+
+	describe("events.ndjson format", () => {
+		test("each line is a valid JSON LogEvent with all required fields", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.info("check.fields", { someKey: 42 });
+
+			await Bun.sleep(50);
+
+			const events = await readJsonLines("events.ndjson");
+			const event = events[0];
+			expect(event).toBeDefined();
+
+			// Verify all LogEvent fields are present
+			expect(event?.timestamp).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
+			expect(event?.level).toBe("info");
+			expect(event?.event).toBe("check.fields");
+			expect(event?.agentName).toBe("test-agent");
+			expect(event?.data).toEqual({ someKey: 42 });
+
+			logger.close();
+		});
+
+		test("uses valid NDJSON format with one JSON object per line", async () => {
 			const logger = createLogger({ logDir, agentName: "test-agent" });
 
 			logger.info("event1");
@@ -421,7 +721,23 @@ describe("createLogger", () => {
 			logger.close();
 		});
 
-		test("errors.log includes full stack traces", async () => {
+		test("tool events also appear in events.ndjson", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.toolStart("Bash", { command: "ls" });
+
+			await Bun.sleep(50);
+
+			const events = await readJsonLines("events.ndjson");
+			expect(events).toHaveLength(1);
+			expect(events[0]?.event).toBe("tool.start");
+
+			logger.close();
+		});
+	});
+
+	describe("errors.log format", () => {
+		test("includes separator lines, timestamp, event, agent, error, and stack", async () => {
 			const logger = createLogger({ logDir, agentName: "test-agent" });
 
 			const error = new Error("Test error");
@@ -431,20 +747,49 @@ describe("createLogger", () => {
 
 			const errorsLog = await readLogFile("errors.log");
 
-			// Should have separator lines
-			expect(errorsLog).toContain("========");
+			// Separator is 72 '=' characters
+			expect(errorsLog).toContain("=".repeat(72));
 			expect(errorsLog).toContain("Timestamp:");
-			expect(errorsLog).toContain("Event:");
-			expect(errorsLog).toContain("Agent:");
-			expect(errorsLog).toContain("Error:");
+			expect(errorsLog).toContain("Event:     test.error");
+			expect(errorsLog).toContain("Agent:     test-agent");
+			expect(errorsLog).toContain("Error:     Error: Test error");
 			expect(errorsLog).toContain("Stack Trace:");
+
+			logger.close();
+		});
+
+		test("includes Data field when data is provided", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			logger.error("db.error", new Error("connection refused"), { host: "localhost" });
+
+			await Bun.sleep(50);
+
+			const errorsLog = await readLogFile("errors.log");
+			expect(errorsLog).toContain("Data:");
+			expect(errorsLog).toContain('"host"');
+
+			logger.close();
+		});
+
+		test("includes cause chain when error.cause exists", async () => {
+			const logger = createLogger({ logDir, agentName: "test-agent" });
+
+			const rootCause = new TypeError("null reference");
+			const mid = new Error("query failed", { cause: rootCause });
+			logger.error("deep.error", mid);
+
+			await Bun.sleep(50);
+
+			const errorsLog = await readLogFile("errors.log");
+			expect(errorsLog).toContain("Caused by: TypeError: null reference");
 
 			logger.close();
 		});
 	});
 
 	describe("multiple events", () => {
-		test("logs multiple events", async () => {
+		test("logs multiple events across all levels", async () => {
 			const logger = createLogger({ logDir, agentName: "test-agent" });
 
 			logger.info("event1");

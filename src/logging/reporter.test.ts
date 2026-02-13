@@ -1,281 +1,218 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { LogEvent } from "../types.ts";
 import { formatLogLine, printToConsole } from "./reporter.ts";
 
+// Helper to build a LogEvent with sensible defaults
+function makeEvent(overrides: Partial<LogEvent> = {}): LogEvent {
+	return {
+		timestamp: "2026-02-13T14:30:00.123Z",
+		level: "info",
+		event: "test.event",
+		agentName: "test-agent",
+		data: {},
+		...overrides,
+	};
+}
+
 describe("formatLogLine", () => {
-	test("formats info level event with agent name", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T14:30:00.123Z",
-			level: "info",
-			event: "agent.started",
-			agentName: "scout-1",
-			data: {},
-		};
-
-		const result = formatLogLine(event);
-
-		// Should contain: timestamp, level (INF), agent name, event
-		expect(result).toContain("[14:30:00]");
-		expect(result).toContain("INF");
-		expect(result).toContain("scout-1");
-		expect(result).toContain("agent.started");
-	});
-
-	test("formats debug level event", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T08:15:30.000Z",
-			level: "debug",
-			event: "config.loaded",
-			agentName: "builder-1",
-			data: {},
-		};
-
-		const result = formatLogLine(event);
-
-		expect(result).toContain("[08:15:30]");
+	test("uses DBG label for debug level", () => {
+		const result = formatLogLine(makeEvent({ level: "debug" }));
 		expect(result).toContain("DBG");
-		expect(result).toContain("config.loaded");
 	});
 
-	test("formats warn level event", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T16:45:00.000Z",
-			level: "warn",
-			event: "rate.limit.approaching",
-			agentName: "monitor",
-			data: {},
-		};
+	test("uses INF label for info level", () => {
+		const result = formatLogLine(makeEvent({ level: "info" }));
+		expect(result).toContain("INF");
+	});
 
-		const result = formatLogLine(event);
-
-		expect(result).toContain("[16:45:00]");
+	test("uses WRN label for warn level", () => {
+		const result = formatLogLine(makeEvent({ level: "warn" }));
 		expect(result).toContain("WRN");
-		expect(result).toContain("rate.limit.approaching");
 	});
 
-	test("formats error level event", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T23:59:59.999Z",
-			level: "error",
-			event: "connection.failed",
-			agentName: "lead-1",
-			data: {},
-		};
-
-		const result = formatLogLine(event);
-
-		expect(result).toContain("[23:59:59]");
+	test("uses ERR label for error level", () => {
+		const result = formatLogLine(makeEvent({ level: "error" }));
 		expect(result).toContain("ERR");
-		expect(result).toContain("connection.failed");
 	});
 
-	test("formats event without agent name", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T12:00:00.000Z",
-			level: "info",
-			event: "system.init",
-			agentName: null,
-			data: {},
-		};
+	test("includes agent name and separator when present", () => {
+		const result = formatLogLine(makeEvent({ agentName: "scout-1" }));
+		expect(result).toContain("scout-1");
+		expect(result).toContain(" | ");
+	});
 
-		const result = formatLogLine(event);
-
-		// Should not contain the agent separator " | "
-		expect(result).toContain("system.init");
+	test("omits agent name and separator when null", () => {
+		const result = formatLogLine(makeEvent({ agentName: null }));
 		expect(result).not.toContain(" | ");
 	});
 
-	test("includes data key=value pairs when present", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "info",
-			event: "task.completed",
-			agentName: "builder-1",
-			data: {
-				taskId: "task-123",
-				duration: 5000,
-			},
-		};
+	test("includes event name in output", () => {
+		const result = formatLogLine(makeEvent({ event: "agent.started" }));
+		expect(result).toContain("agent.started");
+	});
 
-		const result = formatLogLine(event);
+	test("formats string data values as key=value", () => {
+		const result = formatLogLine(makeEvent({ data: { status: "ok" } }));
+		expect(result).toContain("status=ok");
+	});
 
-		expect(result).toContain("taskId=task-123");
+	test("formats number data values as key=value", () => {
+		const result = formatLogLine(makeEvent({ data: { duration: 5000 } }));
 		expect(result).toContain("duration=5000");
 	});
 
-	test("quotes string values containing spaces", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "info",
-			event: "message.received",
-			agentName: "agent-1",
-			data: {
-				message: "hello world",
-				status: "ok",
-			},
-		};
+	test("formats object data values as JSON", () => {
+		const result = formatLogLine(makeEvent({ data: { config: { enabled: true, timeout: 5000 } } }));
+		expect(result).toContain('config={"enabled":true,"timeout":5000}');
+	});
 
-		const result = formatLogLine(event);
+	test("formats null data values as key=null", () => {
+		const result = formatLogLine(makeEvent({ data: { value: null } }));
+		expect(result).toContain("value=null");
+	});
 
+	test("formats undefined data values as key=null", () => {
+		const result = formatLogLine(makeEvent({ data: { value: undefined } }));
+		expect(result).toContain("value=null");
+	});
+
+	test("quotes string data values containing spaces", () => {
+		const result = formatLogLine(makeEvent({ data: { message: "hello world", status: "ok" } }));
 		expect(result).toContain('message="hello world"');
 		expect(result).toContain("status=ok");
 	});
 
-	test("formats null values as key=null", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "info",
-			event: "value.cleared",
-			agentName: "agent-1",
-			data: {
-				value: null,
-			},
-		};
-
-		const result = formatLogLine(event);
-
-		expect(result).toContain("value=null");
+	test("handles multiple data key=value pairs", () => {
+		const result = formatLogLine(makeEvent({ data: { taskId: "task-123", duration: 5000 } }));
+		expect(result).toContain("taskId=task-123");
+		expect(result).toContain("duration=5000");
 	});
 
-	test("formats object values as JSON", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "info",
-			event: "data.received",
-			agentName: "agent-1",
-			data: {
-				config: { enabled: true, timeout: 5000 },
-			},
-		};
-
-		const result = formatLogLine(event);
-
-		expect(result).toContain('config={"enabled":true,"timeout":5000}');
+	test("produces no data suffix for empty data object", () => {
+		const result = formatLogLine(makeEvent({ data: {} }));
+		// The event name should be at the end with no trailing key=value content
+		expect(result).toContain("test.event");
+		// No equals sign means no key=value pairs present
+		expect(result).not.toMatch(/\w+=\S/);
 	});
 
-	test("handles empty data object", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "info",
-			event: "simple.event",
-			agentName: "agent-1",
-			data: {},
-		};
-
-		const result = formatLogLine(event);
-
-		// Should not have any key=value pairs
-		expect(result).toContain("simple.event");
-		expect(result).not.toMatch(/=\S+/); // No equals signs
+	test("extracts HH:MM:SS time from ISO timestamp", () => {
+		const result = formatLogLine(makeEvent({ timestamp: "2026-02-13T14:30:00.123Z" }));
+		expect(result).toContain("[14:30:00]");
 	});
 
-	test("handles timestamp without T separator (fallback)", () => {
-		const event: LogEvent = {
-			timestamp: "invalid-timestamp",
-			level: "info",
-			event: "test.event",
-			agentName: "agent-1",
-			data: {},
-		};
-
-		const result = formatLogLine(event);
-
-		// Should use the raw timestamp as fallback
+	test("falls back to raw timestamp when no T separator", () => {
+		const result = formatLogLine(makeEvent({ timestamp: "invalid-timestamp" }));
 		expect(result).toContain("[invalid-timestamp]");
+	});
+
+	test("contains ANSI escape codes in output", () => {
+		const result = formatLogLine(makeEvent());
+		// \x1b[ is the ANSI escape sequence prefix
+		expect(result).toContain("\x1b[");
+		// Reset sequence should appear at least once
+		expect(result).toContain("\x1b[0m");
+	});
+
+	test("uses different ANSI color codes for different levels", () => {
+		const debugResult = formatLogLine(makeEvent({ level: "debug" }));
+		const infoResult = formatLogLine(makeEvent({ level: "info" }));
+		const warnResult = formatLogLine(makeEvent({ level: "warn" }));
+		const errorResult = formatLogLine(makeEvent({ level: "error" }));
+
+		// Each level uses a distinct color: gray(90), blue(34), yellow(33), red(31)
+		expect(debugResult).toContain("\x1b[90m");
+		expect(infoResult).toContain("\x1b[34m");
+		expect(warnResult).toContain("\x1b[33m");
+		expect(errorResult).toContain("\x1b[31m");
+	});
+
+	test("formats boolean data values via String()", () => {
+		const result = formatLogLine(makeEvent({ data: { enabled: true } }));
+		expect(result).toContain("enabled=true");
 	});
 });
 
 describe("printToConsole", () => {
-	let consoleLogSpy: ReturnType<typeof mock>;
-	let consoleErrorSpy: ReturnType<typeof mock>;
-
-	beforeEach(() => {
-		consoleLogSpy = mock(() => {});
-		consoleErrorSpy = mock(() => {});
-
-		// Replace console methods
-		console.log = consoleLogSpy;
-		console.error = consoleErrorSpy;
-	});
+	let logSpy: ReturnType<typeof spyOn>;
+	let errorSpy: ReturnType<typeof spyOn>;
 
 	afterEach(() => {
-		// Restore console methods (best effort)
-		consoleLogSpy.mockRestore();
-		consoleErrorSpy.mockRestore();
+		logSpy?.mockRestore();
+		errorSpy?.mockRestore();
 	});
 
-	test("prints info events to stdout when verbose is true", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "info",
-			event: "test.event",
-			agentName: "agent-1",
-			data: {},
-		};
+	test("sends info events to console.log", () => {
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
 
-		printToConsole(event, true);
+		printToConsole(makeEvent({ level: "info" }), true);
 
-		expect(consoleLogSpy).toHaveBeenCalledTimes(1);
-		expect(consoleErrorSpy).toHaveBeenCalledTimes(0);
+		expect(logSpy).toHaveBeenCalledTimes(1);
+		expect(errorSpy).toHaveBeenCalledTimes(0);
 	});
 
-	test("prints error events to stderr", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "error",
-			event: "test.error",
-			agentName: "agent-1",
-			data: {},
-		};
+	test("sends warn events to console.log", () => {
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
 
-		printToConsole(event, false);
+		printToConsole(makeEvent({ level: "warn" }), false);
 
-		expect(consoleLogSpy).toHaveBeenCalledTimes(0);
-		expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+		expect(logSpy).toHaveBeenCalledTimes(1);
+		expect(errorSpy).toHaveBeenCalledTimes(0);
 	});
 
-	test("prints warn events to stdout", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "warn",
-			event: "test.warning",
-			agentName: "agent-1",
-			data: {},
-		};
+	test("sends error events to console.error", () => {
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
 
-		printToConsole(event, false);
+		printToConsole(makeEvent({ level: "error" }), false);
 
-		expect(consoleLogSpy).toHaveBeenCalledTimes(1);
-		expect(consoleErrorSpy).toHaveBeenCalledTimes(0);
+		expect(logSpy).toHaveBeenCalledTimes(0);
+		expect(errorSpy).toHaveBeenCalledTimes(1);
 	});
 
 	test("suppresses debug events when verbose is false", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "debug",
-			event: "test.debug",
-			agentName: "agent-1",
-			data: {},
-		};
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
 
-		printToConsole(event, false);
+		printToConsole(makeEvent({ level: "debug" }), false);
 
-		expect(consoleLogSpy).toHaveBeenCalledTimes(0);
-		expect(consoleErrorSpy).toHaveBeenCalledTimes(0);
+		expect(logSpy).toHaveBeenCalledTimes(0);
+		expect(errorSpy).toHaveBeenCalledTimes(0);
 	});
 
-	test("prints debug events when verbose is true", () => {
-		const event: LogEvent = {
-			timestamp: "2024-01-15T10:00:00.000Z",
-			level: "debug",
-			event: "test.debug",
-			agentName: "agent-1",
-			data: {},
-		};
+	test("shows debug events when verbose is true", () => {
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
 
+		printToConsole(makeEvent({ level: "debug" }), true);
+
+		expect(logSpy).toHaveBeenCalledTimes(1);
+		expect(errorSpy).toHaveBeenCalledTimes(0);
+	});
+
+	test("passes formatted line to console method", () => {
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+
+		const event = makeEvent({ level: "info", event: "my.custom.event" });
 		printToConsole(event, true);
 
-		expect(consoleLogSpy).toHaveBeenCalledTimes(1);
-		expect(consoleErrorSpy).toHaveBeenCalledTimes(0);
+		const calledWith = logSpy.mock.calls[0]?.[0] as string;
+		expect(calledWith).toContain("my.custom.event");
+		expect(calledWith).toContain("INF");
+	});
+
+	test("error event output contains the formatted line", () => {
+		logSpy = spyOn(console, "log").mockImplementation(() => {});
+		errorSpy = spyOn(console, "error").mockImplementation(() => {});
+
+		const event = makeEvent({ level: "error", event: "fatal.crash" });
+		printToConsole(event, false);
+
+		const calledWith = errorSpy.mock.calls[0]?.[0] as string;
+		expect(calledWith).toContain("fatal.crash");
+		expect(calledWith).toContain("ERR");
 	});
 });

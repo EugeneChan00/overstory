@@ -252,6 +252,12 @@ function buildAgentManifest(): AgentManifest {
  * to match Biome formatting rules.
  */
 function buildHooksJson(): string {
+	// Tool name extraction: reads hook stdin JSON and extracts tool_name field.
+	// Claude Code sends {"tool_name":"Bash","tool_input":{...}} on stdin for
+	// PreToolUse/PostToolUse hooks.
+	const toolNameExtract =
+		'read -r INPUT; TOOL_NAME=$(echo "$INPUT" | sed \'s/.*"tool_name": *"\\([^"]*\\)".*/\\1/\');';
+
 	const hooks = {
 		hooks: {
 			SessionStart: [
@@ -260,7 +266,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory prime",
+							command: "overstory prime --agent orchestrator",
 						},
 					],
 				},
@@ -271,7 +277,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory mail check --inject",
+							command: "overstory mail check --inject --agent orchestrator",
 						},
 					],
 				},
@@ -282,7 +288,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory log tool-start --agent orchestrator",
+							command: `${toolNameExtract} overstory log tool-start --agent orchestrator --tool-name "$TOOL_NAME"`,
 						},
 					],
 				},
@@ -293,7 +299,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory log tool-end --agent orchestrator",
+							command: `${toolNameExtract} overstory log tool-end --agent orchestrator --tool-name "$TOOL_NAME"`,
 						},
 					],
 				},
@@ -315,7 +321,7 @@ function buildHooksJson(): string {
 					hooks: [
 						{
 							type: "command",
-							command: "overstory prime --compact",
+							command: "overstory prime --agent orchestrator --compact",
 						},
 					],
 				},
@@ -560,5 +566,7 @@ export async function initCommand(args: string[]): Promise<void> {
 		}
 	}
 
-	process.stdout.write("\nDone. Run `overstory status` to see the current state.\n");
+	process.stdout.write("\nDone.\n");
+	process.stdout.write("  Next: run `overstory hooks install` to enable Claude Code hooks.\n");
+	process.stdout.write("  Then: run `overstory status` to see the current state.\n");
 }

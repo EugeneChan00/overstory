@@ -2,26 +2,34 @@
  * Tests for overstory coordinator command.
  *
  * Uses real temp directories and real git repos for file I/O and config loading.
- * Mocks tmux (interferes with developer sessions) and deployHooks (reads a
- * template file that may not exist in test context).
+ * Tmux is injected via the CoordinatorDeps DI interface instead of
+ * mock.module() to avoid the process-global mock leak issue
+ * (see mulch record mx-56558b).
  *
- * WHY mock.module: tmux operations must be mocked because real tmux sessions
- * would interfere with developer sessions and are fragile in CI. deployHooks
- * reads a template from the repo's templates/ directory which may not exist
- * relative to the test's working directory.
+ * WHY DI instead of mock.module: mock.module() in bun:test is process-global
+ * and leaks across test files. The DI approach (same pattern as daemon.ts
+ * _tmux/_triage/_nudge) ensures mocks are scoped to each test invocation.
  */
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { AgentError, ValidationError } from "../errors.ts";
 import { cleanupTempDir, createTempGitRepo } from "../test-helpers.ts";
 import type { AgentSession } from "../types.ts";
+import {
+	type CoordinatorDeps,
+	buildCoordinatorBeacon,
+	coordinatorCommand,
+	loadSessions,
+	resolveAttach,
+	saveSessions,
+} from "./coordinator.ts";
 
-// --- Mocks ---
+// --- Fake Tmux ---
 
-// Track calls for assertions
-let tmuxCalls: {
+/** Track calls to fake tmux for assertions. */
+interface TmuxCallTracker {
 	createSession: Array<{
 		name: string;
 		cwd: string;
@@ -31,43 +39,45 @@ let tmuxCalls: {
 	isSessionAlive: Array<{ name: string; result: boolean }>;
 	killSession: Array<{ name: string }>;
 	sendKeys: Array<{ name: string; keys: string }>;
-};
+}
 
-/** Configurable mock responses for isSessionAlive per session name. */
-let sessionAliveMap: Record<string, boolean>;
+/** Build a fake tmux DI object with configurable session liveness. */
+function makeFakeTmux(sessionAliveMap: Record<string, boolean> = {}): {
+	tmux: NonNullable<CoordinatorDeps["_tmux"]>;
+	calls: TmuxCallTracker;
+} {
+	const calls: TmuxCallTracker = {
+		createSession: [],
+		isSessionAlive: [],
+		killSession: [],
+		sendKeys: [],
+	};
 
-mock.module("../worktree/tmux.ts", () => ({
-	createSession: async (
-		name: string,
-		cwd: string,
-		command: string,
-		env?: Record<string, string>,
-	): Promise<number> => {
-		tmuxCalls.createSession.push({ name, cwd, command, env });
-		return 99999; // Fake PID
-	},
-	isSessionAlive: async (name: string): Promise<boolean> => {
-		const alive = sessionAliveMap[name] ?? false;
-		tmuxCalls.isSessionAlive.push({ name, result: alive });
-		return alive;
-	},
-	killSession: async (name: string): Promise<void> => {
-		tmuxCalls.killSession.push({ name });
-	},
-	sendKeys: async (name: string, keys: string): Promise<void> => {
-		tmuxCalls.sendKeys.push({ name, keys });
-	},
-}));
+	const tmux: NonNullable<CoordinatorDeps["_tmux"]> = {
+		createSession: async (
+			name: string,
+			cwd: string,
+			command: string,
+			env?: Record<string, string>,
+		): Promise<number> => {
+			calls.createSession.push({ name, cwd, command, env });
+			return 99999; // Fake PID
+		},
+		isSessionAlive: async (name: string): Promise<boolean> => {
+			const alive = sessionAliveMap[name] ?? false;
+			calls.isSessionAlive.push({ name, result: alive });
+			return alive;
+		},
+		killSession: async (name: string): Promise<void> => {
+			calls.killSession.push({ name });
+		},
+		sendKeys: async (name: string, keys: string): Promise<void> => {
+			calls.sendKeys.push({ name, keys });
+		},
+	};
 
-mock.module("../agents/hooks-deployer.ts", () => ({
-	deployHooks: async (): Promise<void> => {
-		// No-op: skip template file reading in tests
-	},
-}));
-
-// Import AFTER mocks are registered
-const { buildCoordinatorBeacon, coordinatorCommand, loadSessions, resolveAttach, saveSessions } =
-	await import("./coordinator.ts");
+	return { tmux, calls };
+}
 
 // --- Test Setup ---
 
@@ -93,15 +103,6 @@ beforeEach(async () => {
 			"\n",
 		),
 	);
-
-	// Reset mock tracking
-	tmuxCalls = {
-		createSession: [],
-		isSessionAlive: [],
-		killSession: [],
-		sendKeys: [],
-	};
-	sessionAliveMap = {};
 
 	// Override cwd so coordinator commands find our temp project
 	process.chdir(tempDir);
@@ -149,6 +150,18 @@ async function captureStdout(fn: () => Promise<void>): Promise<string> {
 		process.stdout.write = originalWrite;
 	}
 	return chunks.join("");
+}
+
+/** Build default CoordinatorDeps with fake tmux. */
+function makeDeps(sessionAliveMap: Record<string, boolean> = {}): {
+	deps: CoordinatorDeps;
+	calls: TmuxCallTracker;
+} {
+	const { tmux, calls } = makeFakeTmux(sessionAliveMap);
+	return {
+		deps: { _tmux: tmux },
+		calls,
+	};
 }
 
 // --- Tests ---
@@ -201,15 +214,14 @@ describe("coordinatorCommand unknown subcommand", () => {
 
 describe("startCoordinator", () => {
 	test("writes session to sessions.json with correct fields", async () => {
-		// Mock tmux as not having any existing session
-		sessionAliveMap = {};
+		const { deps, calls } = makeDeps();
 
 		// Override Bun.sleep to skip the 3s and 0.5s waits
 		const originalSleep = Bun.sleep;
 		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
 
 		try {
-			await captureStdout(() => coordinatorCommand(["start"]));
+			await captureStdout(() => coordinatorCommand(["start"], deps));
 		} finally {
 			Bun.sleep = originalSleep;
 		}
@@ -233,22 +245,22 @@ describe("startCoordinator", () => {
 		expect(session?.id).toMatch(/^session-\d+-coordinator$/);
 
 		// Verify tmux createSession was called
-		expect(tmuxCalls.createSession).toHaveLength(1);
-		expect(tmuxCalls.createSession[0]?.name).toBe("overstory-coordinator");
-		expect(tmuxCalls.createSession[0]?.cwd).toBe(tempDir);
+		expect(calls.createSession).toHaveLength(1);
+		expect(calls.createSession[0]?.name).toBe("overstory-coordinator");
+		expect(calls.createSession[0]?.cwd).toBe(tempDir);
 
 		// Verify sendKeys was called (beacon + follow-up Enter)
-		expect(tmuxCalls.sendKeys.length).toBeGreaterThanOrEqual(1);
+		expect(calls.sendKeys.length).toBeGreaterThanOrEqual(1);
 	});
 
 	test("--json outputs JSON with expected fields", async () => {
-		sessionAliveMap = {};
+		const { deps } = makeDeps();
 		const originalSleep = Bun.sleep;
 		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
 
 		let output: string;
 		try {
-			output = await captureStdout(() => coordinatorCommand(["start", "--json"]));
+			output = await captureStdout(() => coordinatorCommand(["start", "--json"], deps));
 		} finally {
 			Bun.sleep = originalSleep;
 		}
@@ -267,12 +279,12 @@ describe("startCoordinator", () => {
 		await saveSessions(sessionsPath, [existing]);
 
 		// Mock tmux as alive for the existing session
-		sessionAliveMap = { "overstory-coordinator": true };
+		const { deps } = makeDeps({ "overstory-coordinator": true });
 
-		await expect(coordinatorCommand(["start"])).rejects.toThrow(AgentError);
+		await expect(coordinatorCommand(["start"], deps)).rejects.toThrow(AgentError);
 
 		try {
-			await coordinatorCommand(["start"]);
+			await coordinatorCommand(["start"], deps);
 		} catch (err) {
 			expect(err).toBeInstanceOf(AgentError);
 			const ae = err as AgentError;
@@ -289,13 +301,13 @@ describe("startCoordinator", () => {
 		await saveSessions(sessionsPath, [deadSession]);
 
 		// Mock tmux as NOT alive for the existing session
-		sessionAliveMap = { "overstory-coordinator": false };
+		const { deps } = makeDeps({ "overstory-coordinator": false });
 
 		const originalSleep = Bun.sleep;
 		Bun.sleep = (() => Promise.resolve()) as typeof Bun.sleep;
 
 		try {
-			await captureStdout(() => coordinatorCommand(["start"]));
+			await captureStdout(() => coordinatorCommand(["start"], deps));
 		} finally {
 			Bun.sleep = originalSleep;
 		}
@@ -321,9 +333,9 @@ describe("stopCoordinator", () => {
 		await saveSessions(sessionsPath, [session]);
 
 		// Tmux is alive so killSession will be called
-		sessionAliveMap = { "overstory-coordinator": true };
+		const { deps, calls } = makeDeps({ "overstory-coordinator": true });
 
-		await captureStdout(() => coordinatorCommand(["stop"]));
+		await captureStdout(() => coordinatorCommand(["stop"], deps));
 
 		// Verify session is now completed
 		const sessions = await loadSessions(sessionsPath);
@@ -331,16 +343,16 @@ describe("stopCoordinator", () => {
 		expect(sessions[0]?.state).toBe("completed");
 
 		// Verify killSession was called
-		expect(tmuxCalls.killSession).toHaveLength(1);
-		expect(tmuxCalls.killSession[0]?.name).toBe("overstory-coordinator");
+		expect(calls.killSession).toHaveLength(1);
+		expect(calls.killSession[0]?.name).toBe("overstory-coordinator");
 	});
 
 	test("--json outputs JSON with stopped flag", async () => {
 		const session = makeCoordinatorSession({ state: "working" });
 		await saveSessions(sessionsPath, [session]);
-		sessionAliveMap = { "overstory-coordinator": true };
+		const { deps } = makeDeps({ "overstory-coordinator": true });
 
-		const output = await captureStdout(() => coordinatorCommand(["stop", "--json"]));
+		const output = await captureStdout(() => coordinatorCommand(["stop", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;
 		expect(parsed.stopped).toBe(true);
 		expect(parsed.sessionId).toBe(session.id);
@@ -351,24 +363,26 @@ describe("stopCoordinator", () => {
 		await saveSessions(sessionsPath, [session]);
 
 		// Tmux is NOT alive — should skip killSession
-		sessionAliveMap = { "overstory-coordinator": false };
+		const { deps, calls } = makeDeps({ "overstory-coordinator": false });
 
-		await captureStdout(() => coordinatorCommand(["stop"]));
+		await captureStdout(() => coordinatorCommand(["stop"], deps));
 
 		// Verify session is completed
 		const sessions = await loadSessions(sessionsPath);
 		expect(sessions[0]?.state).toBe("completed");
 
 		// killSession should NOT have been called since session was already dead
-		expect(tmuxCalls.killSession).toHaveLength(0);
+		expect(calls.killSession).toHaveLength(0);
 	});
 
 	test("throws AgentError when no coordinator session exists", async () => {
+		const { deps } = makeDeps();
+
 		// No sessions.json at all
-		await expect(coordinatorCommand(["stop"])).rejects.toThrow(AgentError);
+		await expect(coordinatorCommand(["stop"], deps)).rejects.toThrow(AgentError);
 
 		try {
-			await coordinatorCommand(["stop"]);
+			await coordinatorCommand(["stop"], deps);
 		} catch (err) {
 			expect(err).toBeInstanceOf(AgentError);
 			const ae = err as AgentError;
@@ -379,19 +393,22 @@ describe("stopCoordinator", () => {
 	test("throws AgentError when only completed sessions exist", async () => {
 		const completed = makeCoordinatorSession({ state: "completed" });
 		await saveSessions(sessionsPath, [completed]);
+		const { deps } = makeDeps();
 
-		await expect(coordinatorCommand(["stop"])).rejects.toThrow(AgentError);
+		await expect(coordinatorCommand(["stop"], deps)).rejects.toThrow(AgentError);
 	});
 });
 
 describe("statusCoordinator", () => {
 	test("shows 'not running' when no session exists", async () => {
-		const output = await captureStdout(() => coordinatorCommand(["status"]));
+		const { deps } = makeDeps();
+		const output = await captureStdout(() => coordinatorCommand(["status"], deps));
 		expect(output).toContain("not running");
 	});
 
 	test("--json shows running:false when no session exists", async () => {
-		const output = await captureStdout(() => coordinatorCommand(["status", "--json"]));
+		const { deps } = makeDeps();
+		const output = await captureStdout(() => coordinatorCommand(["status", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;
 		expect(parsed.running).toBe(false);
 	});
@@ -399,9 +416,9 @@ describe("statusCoordinator", () => {
 	test("shows running state when coordinator is alive", async () => {
 		const session = makeCoordinatorSession({ state: "working" });
 		await saveSessions(sessionsPath, [session]);
-		sessionAliveMap = { "overstory-coordinator": true };
+		const { deps } = makeDeps({ "overstory-coordinator": true });
 
-		const output = await captureStdout(() => coordinatorCommand(["status"]));
+		const output = await captureStdout(() => coordinatorCommand(["status"], deps));
 		expect(output).toContain("running");
 		expect(output).toContain(session.id);
 		expect(output).toContain("overstory-coordinator");
@@ -410,9 +427,9 @@ describe("statusCoordinator", () => {
 	test("--json shows correct fields when running", async () => {
 		const session = makeCoordinatorSession({ state: "working", pid: 99999 });
 		await saveSessions(sessionsPath, [session]);
-		sessionAliveMap = { "overstory-coordinator": true };
+		const { deps } = makeDeps({ "overstory-coordinator": true });
 
-		const output = await captureStdout(() => coordinatorCommand(["status", "--json"]));
+		const output = await captureStdout(() => coordinatorCommand(["status", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;
 		expect(parsed.running).toBe(true);
 		expect(parsed.sessionId).toBe(session.id);
@@ -426,9 +443,9 @@ describe("statusCoordinator", () => {
 		await saveSessions(sessionsPath, [session]);
 
 		// Tmux is NOT alive — triggers zombie reconciliation
-		sessionAliveMap = { "overstory-coordinator": false };
+		const { deps } = makeDeps({ "overstory-coordinator": false });
 
-		const output = await captureStdout(() => coordinatorCommand(["status", "--json"]));
+		const output = await captureStdout(() => coordinatorCommand(["status", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;
 		expect(parsed.running).toBe(false);
 		expect(parsed.state).toBe("zombie");
@@ -441,9 +458,9 @@ describe("statusCoordinator", () => {
 	test("reconciles zombie for booting state too", async () => {
 		const session = makeCoordinatorSession({ state: "booting" });
 		await saveSessions(sessionsPath, [session]);
-		sessionAliveMap = { "overstory-coordinator": false };
+		const { deps } = makeDeps({ "overstory-coordinator": false });
 
-		const output = await captureStdout(() => coordinatorCommand(["status", "--json"]));
+		const output = await captureStdout(() => coordinatorCommand(["status", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;
 		expect(parsed.state).toBe("zombie");
 	});
@@ -451,8 +468,9 @@ describe("statusCoordinator", () => {
 	test("does not show completed sessions as active", async () => {
 		const completed = makeCoordinatorSession({ state: "completed" });
 		await saveSessions(sessionsPath, [completed]);
+		const { deps } = makeDeps();
 
-		const output = await captureStdout(() => coordinatorCommand(["status", "--json"]));
+		const output = await captureStdout(() => coordinatorCommand(["status", "--json"], deps));
 		const parsed = JSON.parse(output) as Record<string, unknown>;
 		expect(parsed.running).toBe(false);
 	});

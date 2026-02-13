@@ -5,15 +5,14 @@
 
 ## Your Assignment
 
-- **Agent Name:** builder-metrics
-- **Task ID:** overstory-5y26
-- **Spec:** /dev/stdin
-- **Branch:** overstory/builder-metrics/overstory-5y26
-- **Parent:** lead-tests-4
+- **Agent Name:** builder-supervisor-test
+- **Task ID:** overstory-ow1m
+- **Spec:** No spec file provided
+- **Branch:** overstory/builder-supervisor-test/overstory-ow1m
+- **Parent:** lead-tests-1
 - **Depth:** 2
 
-Read your task spec at the path above. It contains the full description of
-what you need to build or review.
+No task spec was provided. Check your mail or ask your parent agent for details.
 
 ## File Scope (exclusive ownership)
 
@@ -21,8 +20,7 @@ You may ONLY modify the files listed below. Do not touch any other files.
 If you need changes outside your scope, send mail to your parent agent
 requesting the modification.
 
-- `src/metrics/store.test.ts`
-- `src/metrics/summary.test.ts`
+No file scope restrictions
 
 ## Expertise
 
@@ -32,26 +30,26 @@ No specific expertise domains configured
 
 ## Communication
 
-Use `overstory mail` for all communication. Your address is **builder-metrics**.
+Use `overstory mail` for all communication. Your address is **builder-supervisor-test**.
 
 ```bash
 # Check your inbox (do this regularly)
-overstory mail check --agent builder-metrics
+overstory mail check --agent builder-supervisor-test
 
 # Send a status update to your parent
-overstory mail send --to lead-tests-4 --subject "status" \
-  --body "Progress update here" --type status --agent builder-metrics
+overstory mail send --to lead-tests-1 --subject "status" \
+  --body "Progress update here" --type status --agent builder-supervisor-test
 
 # Ask a question
-overstory mail send --to lead-tests-4 --subject "question" \
-  --body "Your question here" --type question --priority high --agent builder-metrics
+overstory mail send --to lead-tests-1 --subject "question" \
+  --body "Your question here" --type question --priority high --agent builder-supervisor-test
 
 # Report completion
-overstory mail send --to lead-tests-4 --subject "done" \
-  --body "Summary of what was done" --type result --agent builder-metrics
+overstory mail send --to lead-tests-1 --subject "done" \
+  --body "Summary of what was done" --type result --agent builder-supervisor-test
 
 # Reply to a message
-overstory mail reply <message-id> --body "Your reply" --agent builder-metrics
+overstory mail reply <message-id> --body "Your reply" --agent builder-supervisor-test
 ```
 
 ## Spawning Sub-Workers
@@ -65,9 +63,9 @@ Before reporting completion, you MUST pass all quality gates:
 1. **Tests:** `bun test` — all tests must pass
 2. **Lint:** `bun run lint` — zero errors
 3. **Typecheck:** `bun run typecheck` — no TypeScript errors
-4. **Commit:** all changes committed to your branch (overstory/builder-metrics/overstory-5y26)
-5. **Signal completion:** send `worker_done` mail to lead-tests-4: `overstory mail send --to lead-tests-4 --subject "Worker done: overstory-5y26" --body "Quality gates passed." --type worker_done --agent builder-metrics`
-6. **Close issue:** `bd close overstory-5y26 --reason "summary of changes"`
+4. **Commit:** all changes committed to your branch (overstory/builder-supervisor-test/overstory-ow1m)
+5. **Signal completion:** send `worker_done` mail to lead-tests-1: `overstory mail send --to lead-tests-1 --subject "Worker done: overstory-ow1m" --body "Quality gates passed." --type worker_done --agent builder-supervisor-test`
+6. **Close issue:** `bd close overstory-ow1m --reason "summary of changes"`
 
 Do NOT push to the canonical branch. Your work will be merged by the
 orchestrator via `overstory merge`.
@@ -75,7 +73,7 @@ orchestrator via `overstory merge`.
 ## Constraints
 
 - Only modify files in your File Scope
-- Commit only to your branch: overstory/builder-metrics/overstory-5y26
+- Commit only to your branch: overstory/builder-supervisor-test/overstory-ow1m
 - Never push to the canonical branch
 - Report completion via `bd close` AND `overstory mail send --type result`
 - If you encounter a blocking issue, send mail with `--priority urgent --type error`

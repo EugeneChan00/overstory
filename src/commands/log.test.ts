@@ -279,6 +279,153 @@ describe("logCommand", () => {
 		expect(metrics[0]?.parentAgent).toBe("parent-agent");
 	});
 
+	test("session-end does NOT transition coordinator to completed (persistent agent)", async () => {
+		// Create sessions.db with a coordinator agent
+		const dbPath = join(tempDir, ".overstory", "sessions.db");
+		const session: AgentSession = {
+			id: "session-coord",
+			agentName: "coordinator",
+			capability: "coordinator",
+			worktreePath: tempDir,
+			branchName: "main",
+			beadId: "",
+			tmuxSession: "overstory-coordinator",
+			state: "working",
+			pid: 11111,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date(Date.now() - 60_000).toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+		};
+		const store = createSessionStore(dbPath);
+		store.upsert(session);
+		store.close();
+
+		await logCommand(["session-end", "--agent", "coordinator"]);
+
+		// Coordinator should remain 'working', not transition to 'completed'
+		const readStore = createSessionStore(dbPath);
+		const updatedSession = readStore.getByName("coordinator");
+		readStore.close();
+
+		expect(updatedSession).toBeDefined();
+		expect(updatedSession?.state).toBe("working");
+		// But lastActivity should be updated
+		expect(new Date(updatedSession?.lastActivity ?? "").getTime()).toBeGreaterThan(
+			new Date(session.lastActivity).getTime(),
+		);
+	});
+
+	test("session-end does NOT transition monitor to completed (persistent agent)", async () => {
+		const dbPath = join(tempDir, ".overstory", "sessions.db");
+		const session: AgentSession = {
+			id: "session-mon",
+			agentName: "monitor",
+			capability: "monitor",
+			worktreePath: tempDir,
+			branchName: "main",
+			beadId: "",
+			tmuxSession: "overstory-monitor",
+			state: "working",
+			pid: 22222,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date(Date.now() - 60_000).toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+		};
+		const store = createSessionStore(dbPath);
+		store.upsert(session);
+		store.close();
+
+		await logCommand(["session-end", "--agent", "monitor"]);
+
+		const readStore = createSessionStore(dbPath);
+		const updatedSession = readStore.getByName("monitor");
+		readStore.close();
+
+		expect(updatedSession).toBeDefined();
+		expect(updatedSession?.state).toBe("working");
+	});
+
+	test("session-end writes pending-nudge marker for coordinator when lead completes", async () => {
+		// Create sessions.db with a lead agent
+		const dbPath = join(tempDir, ".overstory", "sessions.db");
+		const session: AgentSession = {
+			id: "session-lead",
+			agentName: "lead-alpha",
+			capability: "lead",
+			worktreePath: tempDir,
+			branchName: "lead-alpha-branch",
+			beadId: "bead-lead-001",
+			tmuxSession: "overstory-lead-alpha",
+			state: "working",
+			pid: 33333,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+		};
+		const store = createSessionStore(dbPath);
+		store.upsert(session);
+		store.close();
+
+		await logCommand(["session-end", "--agent", "lead-alpha"]);
+
+		// Verify the pending-nudge marker was written for the coordinator
+		const markerPath = join(tempDir, ".overstory", "pending-nudges", "coordinator.json");
+		const markerFile = Bun.file(markerPath);
+		expect(await markerFile.exists()).toBe(true);
+
+		const marker = JSON.parse(await markerFile.text());
+		expect(marker.from).toBe("lead-alpha");
+		expect(marker.reason).toBe("lead_completed");
+		expect(marker.subject).toContain("lead-alpha");
+		expect(marker.messageId).toContain("auto-nudge-lead-alpha-");
+		expect(marker.createdAt).toBeDefined();
+	});
+
+	test("session-end does NOT write pending-nudge marker for non-lead agents", async () => {
+		// Create sessions.db with a builder agent (not a lead)
+		const dbPath = join(tempDir, ".overstory", "sessions.db");
+		const session: AgentSession = {
+			id: "session-builder",
+			agentName: "builder-beta",
+			capability: "builder",
+			worktreePath: tempDir,
+			branchName: "builder-beta-branch",
+			beadId: "bead-builder-001",
+			tmuxSession: "overstory-builder-beta",
+			state: "working",
+			pid: 44444,
+			parentAgent: null,
+			depth: 0,
+			runId: null,
+			startedAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+		};
+		const store = createSessionStore(dbPath);
+		store.upsert(session);
+		store.close();
+
+		await logCommand(["session-end", "--agent", "builder-beta"]);
+
+		// Verify no pending-nudge marker was written
+		const markerPath = join(tempDir, ".overstory", "pending-nudges", "coordinator.json");
+		const markerFile = Bun.file(markerPath);
+		expect(await markerFile.exists()).toBe(false);
+	});
+
 	test("session-end does not crash when sessions.db does not exist", async () => {
 		// No sessions.db file exists
 		// session-end should complete without throwing

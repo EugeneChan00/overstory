@@ -113,14 +113,34 @@ interface CleanResult {
 }
 
 /**
- * Kill all overstory-prefixed tmux sessions.
+ * Kill overstory tmux sessions registered in THIS project's SessionStore.
+ *
+ * Project-scoped: only kills tmux sessions whose names appear in the
+ * project's sessions.db (or sessions.json). This prevents cross-project
+ * kills during dogfooding, where `bun test` might run inside a live swarm.
+ *
+ * Falls back to killing all "overstory-*" prefixed tmux sessions only if
+ * the SessionStore is unavailable (graceful degradation for broken state).
  */
-async function killAllTmuxSessions(): Promise<number> {
+async function killAllTmuxSessions(overstoryDir: string): Promise<number> {
 	let killed = 0;
 	try {
-		const sessions = await listSessions();
-		const overStorySessions = sessions.filter((s) => s.name.startsWith("overstory-"));
-		for (const session of overStorySessions) {
+		const tmuxSessions = await listSessions();
+		const overStorySessions = tmuxSessions.filter((s) => s.name.startsWith("overstory-"));
+		if (overStorySessions.length === 0) {
+			return 0;
+		}
+
+		// Build a set of tmux session names registered in this project's SessionStore.
+		const registeredNames = loadRegisteredTmuxNames(overstoryDir);
+
+		// If we got registered names, only kill those. Otherwise fall back to all overstory-*.
+		const toKill =
+			registeredNames !== null
+				? overStorySessions.filter((s) => registeredNames.has(s.name))
+				: overStorySessions;
+
+		for (const session of toKill) {
 			try {
 				await killSession(session.name);
 				killed++;
@@ -132,6 +152,35 @@ async function killAllTmuxSessions(): Promise<number> {
 		// tmux not available or no server running
 	}
 	return killed;
+}
+
+/**
+ * Load the set of tmux session names registered in this project's SessionStore.
+ *
+ * Returns null if the SessionStore cannot be opened (signals the caller to
+ * fall back to the legacy "kill all overstory-*" behavior).
+ */
+function loadRegisteredTmuxNames(overstoryDir: string): Set<string> | null {
+	try {
+		const dbPath = join(overstoryDir, "sessions.db");
+		const jsonPath = join(overstoryDir, "sessions.json");
+		if (!existsSync(dbPath) && !existsSync(jsonPath)) {
+			// No session data at all -- return empty set (not null).
+			// This is distinct from "store unavailable": it means the project
+			// has no registered sessions, so nothing should be killed.
+			return new Set();
+		}
+		const { store } = openSessionStore(overstoryDir);
+		try {
+			const allSessions = store.getAll();
+			return new Set(allSessions.map((s) => s.tmuxSession));
+		} finally {
+			store.close();
+		}
+	} catch {
+		// SessionStore is broken -- fall back to legacy behavior
+		return null;
+	}
 }
 
 /**
@@ -331,7 +380,7 @@ export async function cleanCommand(args: string[]): Promise<void> {
 
 	// 1. Kill tmux sessions (must happen before worktree removal)
 	if (doWorktrees || all) {
-		result.tmuxKilled = await killAllTmuxSessions();
+		result.tmuxKilled = await killAllTmuxSessions(overstoryDir);
 	}
 
 	// 2. Remove worktrees

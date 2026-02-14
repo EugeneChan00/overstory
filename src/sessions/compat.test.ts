@@ -131,6 +131,30 @@ describe("openSessionStore", () => {
 		store2.close();
 	});
 
+	test("imports from sessions.json when sessions.db exists but is empty", async () => {
+		// Simulate the scenario where sessions.db was created (e.g., by init) but
+		// no sessions were ever written to it, while sessions.json has records from
+		// a previous coordinator start that used the old code path (overstory-036f).
+		const { store: emptyStore } = openSessionStore(overstoryDir);
+		expect(emptyStore.getAll()).toHaveLength(0);
+		emptyStore.close();
+
+		// Now write records to sessions.json (simulating old code path)
+		await writeSessionsJson([
+			makeJsonSession({ agentName: "orphaned-coordinator", id: "s-orphan", state: "booting" }),
+		]);
+
+		// Re-open: DB exists but is empty, so JSON records should be imported
+		const { store: store2, migrated } = openSessionStore(overstoryDir);
+		expect(migrated).toBe(true);
+
+		const all = store2.getAll();
+		expect(all).toHaveLength(1);
+		expect(all[0]?.agentName).toBe("orphaned-coordinator");
+		expect(all[0]?.state).toBe("booting");
+		store2.close();
+	});
+
 	test("handles empty sessions.json (no migration needed)", async () => {
 		await writeSessionsJson([]);
 

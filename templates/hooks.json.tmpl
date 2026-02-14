@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "overstory prime --agent {{AGENT_NAME}}"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; overstory prime --agent {{AGENT_NAME}}"
 					}
 				]
 			}
@@ -17,7 +17,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "overstory mail check --inject --agent {{AGENT_NAME}}"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; overstory mail check --inject --agent {{AGENT_NAME}}"
 					}
 				]
 			}
@@ -28,7 +28,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "read -r INPUT; echo \"$INPUT\" | overstory log tool-start --agent {{AGENT_NAME}} --stdin"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; read -r INPUT; echo \"$INPUT\" | overstory log tool-start --agent {{AGENT_NAME}} --stdin"
 					}
 				]
 			}
@@ -39,7 +39,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "read -r INPUT; echo \"$INPUT\" | overstory log tool-end --agent {{AGENT_NAME}} --stdin"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; read -r INPUT; echo \"$INPUT\" | overstory log tool-end --agent {{AGENT_NAME}} --stdin"
 					}
 				]
 			}
@@ -50,7 +50,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "read -r INPUT; echo \"$INPUT\" | overstory log session-end --agent {{AGENT_NAME}} --stdin"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; read -r INPUT; echo \"$INPUT\" | overstory log session-end --agent {{AGENT_NAME}} --stdin"
 					}
 				]
 			}
@@ -61,7 +61,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "overstory prime --agent {{AGENT_NAME}} --compact"
+						"command": "[ -z \"$OVERSTORY_AGENT_NAME\" ] && exit 0; overstory prime --agent {{AGENT_NAME}} --compact"
 					}
 				]
 			}

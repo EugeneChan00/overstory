@@ -173,7 +173,8 @@ describe("deployHooks", () => {
 		const parsed = JSON.parse(content);
 		const sessionStart = parsed.hooks.SessionStart[0];
 		expect(sessionStart.hooks[0].type).toBe("command");
-		expect(sessionStart.hooks[0].command).toBe("overstory prime --agent prime-agent");
+		expect(sessionStart.hooks[0].command).toContain("overstory prime --agent prime-agent");
+		expect(sessionStart.hooks[0].command).toContain("OVERSTORY_AGENT_NAME");
 	});
 
 	test("UserPromptSubmit hook runs mail check with agent name", async () => {
@@ -185,7 +186,10 @@ describe("deployHooks", () => {
 		const content = await Bun.file(outputPath).text();
 		const parsed = JSON.parse(content);
 		const userPrompt = parsed.hooks.UserPromptSubmit[0];
-		expect(userPrompt.hooks[0].command).toBe("overstory mail check --inject --agent mail-agent");
+		expect(userPrompt.hooks[0].command).toContain(
+			"overstory mail check --inject --agent mail-agent",
+		);
+		expect(userPrompt.hooks[0].command).toContain("OVERSTORY_AGENT_NAME");
 	});
 
 	test("PreCompact hook runs overstory prime with --compact flag", async () => {
@@ -198,7 +202,10 @@ describe("deployHooks", () => {
 		const parsed = JSON.parse(content);
 		const preCompact = parsed.hooks.PreCompact[0];
 		expect(preCompact.hooks[0].type).toBe("command");
-		expect(preCompact.hooks[0].command).toBe("overstory prime --agent compact-agent --compact");
+		expect(preCompact.hooks[0].command).toContain(
+			"overstory prime --agent compact-agent --compact",
+		);
+		expect(preCompact.hooks[0].command).toContain("OVERSTORY_AGENT_NAME");
 	});
 
 	test("PreToolUse hook pipes stdin to overstory log with --stdin flag", async () => {
@@ -1110,6 +1117,43 @@ describe("structural enforcement integration", () => {
 		const coordMatchers = coordPreToolUse.map((h: { matcher: string }) => h.matcher);
 		const supMatchers = supPreToolUse.map((h: { matcher: string }) => h.matcher);
 		expect(coordMatchers).toEqual(supMatchers);
+	});
+
+	test("all template hooks include ENV_GUARD for project root isolation", async () => {
+		const worktreePath = join(tempDir, "env-guard-tmpl-wt");
+
+		await deployHooks(worktreePath, "env-guard-agent", "builder");
+
+		const outputPath = join(worktreePath, ".claude", "settings.local.json");
+		const content = await Bun.file(outputPath).text();
+		const parsed = JSON.parse(content);
+
+		// All hook types from the template should include ENV_GUARD
+		for (const hookType of [
+			"SessionStart",
+			"UserPromptSubmit",
+			"PreCompact",
+			"PostToolUse",
+			"Stop",
+		]) {
+			const hooks = parsed.hooks[hookType] as Array<{
+				matcher: string;
+				hooks: Array<{ command: string }>;
+			}>;
+			expect(hooks.length).toBeGreaterThan(0);
+			const baseHook = hooks.find((h) => h.matcher === "");
+			expect(baseHook).toBeDefined();
+			expect(baseHook?.hooks[0]?.command).toContain("OVERSTORY_AGENT_NAME");
+		}
+
+		// PreToolUse base hook (matcher == "") should also have ENV_GUARD
+		const preToolUse = parsed.hooks.PreToolUse as Array<{
+			matcher: string;
+			hooks: Array<{ command: string }>;
+		}>;
+		const basePreToolUse = preToolUse.find((h) => h.matcher === "");
+		expect(basePreToolUse).toBeDefined();
+		expect(basePreToolUse?.hooks[0]?.command).toContain("OVERSTORY_AGENT_NAME");
 	});
 
 	test("all deployed hook commands include env var guard for project root isolation", async () => {

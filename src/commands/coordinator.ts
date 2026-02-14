@@ -114,9 +114,10 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 
 		// Deploy hooks to the project root so the coordinator gets event logging,
 		// mail check --inject, and activity tracking via the standard hook pipeline.
-		// The ENV_GUARD prefix in hooks-deployer.ts ensures these hooks only activate
-		// when OVERSTORY_AGENT_NAME is set (i.e. for the coordinator's tmux session),
-		// so the user's own Claude Code session at the project root is unaffected.
+		// The ENV_GUARD prefix on all hooks (both template and generated guards)
+		// ensures they only activate when OVERSTORY_AGENT_NAME is set (i.e. for
+		// the coordinator's tmux session), so the user's own Claude Code session
+		// at the project root is unaffected.
 		await deployHooks(projectRoot, COORDINATOR_NAME, "coordinator");
 
 		// Create coordinator identity if first run

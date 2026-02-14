@@ -63,10 +63,11 @@ function loadJsonSessions(jsonPath: string): AgentSession[] {
  * Open or create a SessionStore at the given .overstory directory root.
  *
  * Migration logic:
- * 1. If sessions.db exists, open it directly (SQLite is authoritative).
- * 2. If sessions.db does NOT exist but sessions.json does, create sessions.db
+ * 1. If sessions.db exists AND has rows, open it directly (SQLite is authoritative).
+ * 2. If sessions.db exists but is empty, check sessions.json for importable records.
+ * 3. If sessions.db does NOT exist but sessions.json does, create sessions.db
  *    and import all entries from sessions.json.
- * 3. If neither exists, create an empty sessions.db.
+ * 4. If neither exists, create an empty sessions.db.
  *
  * @param overstoryDir - Path to the .overstory directory (e.g., /project/.overstory)
  * @returns An object with the SessionStore and whether a migration occurred.
@@ -82,8 +83,10 @@ export function openSessionStore(overstoryDir: string): {
 
 	const store = createSessionStore(dbPath);
 
-	// If the DB already existed, it is authoritative -- no migration needed
-	if (dbExists) {
+	// If the DB already existed AND has data, it is authoritative -- no migration needed.
+	// If the DB file exists but is empty (e.g., created by init before any sessions were
+	// recorded), fall through to check sessions.json for importable records (overstory-036f).
+	if (dbExists && store.getAll().length > 0) {
 		return { store, migrated: false };
 	}
 

@@ -83,8 +83,19 @@ function updateLastActivity(projectRoot: string, agentName: string): void {
 }
 
 /**
+ * Agent capabilities that run as persistent interactive sessions.
+ * The Stop hook fires every turn for these agents (not just at session end),
+ * so they must NOT auto-transition to 'completed' on session-end events.
+ */
+const PERSISTENT_CAPABILITIES = new Set(["coordinator", "monitor"]);
+
+/**
  * Transition agent state to 'completed' in the SessionStore.
  * Called when session-end event fires.
+ *
+ * Skips the transition for persistent agent types (coordinator, monitor)
+ * whose Stop hook fires every turn, not just at true session end.
+ *
  * Non-fatal: silently ignores errors to avoid breaking hook execution.
  */
 function transitionToCompleted(projectRoot: string, agentName: string): void {
@@ -92,6 +103,12 @@ function transitionToCompleted(projectRoot: string, agentName: string): void {
 		const overstoryDir = join(projectRoot, ".overstory");
 		const { store } = openSessionStore(overstoryDir);
 		try {
+			const session = store.getByName(agentName);
+			if (session && PERSISTENT_CAPABILITIES.has(session.capability)) {
+				// Persistent agents: only update activity, don't mark completed
+				store.updateLastActivity(agentName);
+				return;
+			}
 			store.updateState(agentName, "completed");
 			store.updateLastActivity(agentName);
 		} finally {
@@ -305,6 +322,28 @@ export async function logCommand(args: string[]): Promise<void> {
 					});
 				} catch {
 					// Non-fatal: identity may not exist for this agent
+				}
+
+				// Auto-nudge coordinator when a lead completes so it wakes up
+				// to process merge_ready / worker_done messages without waiting
+				// for user input (see decision mx-728f8d).
+				if (agentSession?.capability === "lead") {
+					try {
+						const nudgesDir = join(config.project.root, ".overstory", "pending-nudges");
+						const { mkdir } = await import("node:fs/promises");
+						await mkdir(nudgesDir, { recursive: true });
+						const markerPath = join(nudgesDir, "coordinator.json");
+						const marker = {
+							from: agentName,
+							reason: "lead_completed",
+							subject: `Lead ${agentName} completed — check mail for merge_ready/worker_done`,
+							messageId: `auto-nudge-${agentName}-${Date.now()}`,
+							createdAt: new Date().toISOString(),
+						};
+						await Bun.write(markerPath, `${JSON.stringify(marker, null, "\t")}\n`);
+					} catch {
+						// Non-fatal: nudge failure should not break session-end
+					}
 				}
 
 				// Record session metrics (with optional token data from transcript)

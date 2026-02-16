@@ -221,6 +221,21 @@ export const COMMANDS: readonly CommandDef[] = [
 		],
 	},
 	{
+		name: "feed",
+		desc: "Unified real-time event stream across all agents",
+		flags: [
+			{ name: "--follow", desc: "Continuously poll for new events" },
+			{ name: "-f", desc: "Alias for --follow" },
+			{ name: "--interval", desc: "Polling interval in ms", takesValue: true },
+			{ name: "--agent", desc: "Filter by agent", takesValue: true },
+			{ name: "--run", desc: "Filter by run", takesValue: true },
+			{ name: "--since", desc: "Start time (ISO 8601)", takesValue: true },
+			{ name: "--limit", desc: "Max initial events", takesValue: true },
+			{ name: "--json", desc: "JSON output" },
+			{ name: "--help", desc: "Show help" },
+		],
+	},
+	{
 		name: "replay",
 		desc: "Interleaved chronological replay across agents",
 		flags: [
@@ -565,7 +580,7 @@ export function generateBash(): string {
 		"  local cur prev words cword",
 		"  _init_completion || return",
 		"",
-		"  local commands='init sling prime status dashboard inspect merge nudge clean doctor log logs watch trace errors replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run'",
+		"  local commands='init sling prime status dashboard inspect merge nudge clean doctor log logs watch trace errors feed replay costs metrics spec coordinator supervisor hooks monitor mail group worktree run'",
 		"",
 		"  # Top-level completion",
 		"  if [[ $cword -eq 1 ]]; then",

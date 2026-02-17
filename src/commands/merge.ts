@@ -16,6 +16,7 @@ import { loadConfig } from "../config.ts";
 import { MergeError, ValidationError } from "../errors.ts";
 import { createMergeQueue } from "../merge/queue.ts";
 import { createMergeResolver } from "../merge/resolver.ts";
+import { createMulchClient } from "../mulch/client.ts";
 import type { MergeEntry, MergeResult } from "../types.ts";
 
 /**
@@ -172,9 +173,11 @@ export async function mergeCommand(args: string[]): Promise<void> {
 	const config = await loadConfig(cwd);
 	const queuePath = join(config.project.root, ".overstory", "merge-queue.db");
 	const queue = createMergeQueue(queuePath);
+	const mulchClient = createMulchClient(config.project.root);
 	const resolver = createMergeResolver({
 		aiResolveEnabled: config.merge.aiResolveEnabled,
 		reimagineEnabled: config.merge.reimagineEnabled,
+		mulchClient,
 	});
 
 	if (branchName) {

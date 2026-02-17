@@ -13,7 +13,13 @@
 
 import { MergeError } from "../errors.ts";
 import type { MulchClient } from "../mulch/client.ts";
-import type { MergeEntry, MergeResult, ResolutionTier } from "../types.ts";
+import type {
+	ConflictHistory,
+	MergeEntry,
+	MergeResult,
+	ParsedConflictPattern,
+	ResolutionTier,
+} from "../types.ts";
 
 export interface MergeResolver {
 	/** Attempt to merge the entry's branch into the canonical branch with tiered resolution. */
@@ -192,6 +198,7 @@ export function looksLikeProse(text: string): boolean {
 async function tryAiResolve(
 	conflictFiles: string[],
 	repoRoot: string,
+	pastResolutions?: string[],
 ): Promise<{ success: boolean; remainingConflicts: string[] }> {
 	const remainingConflicts: string[] = [];
 
@@ -200,11 +207,17 @@ async function tryAiResolve(
 
 		try {
 			const content = await readFile(filePath);
+			const historyContext =
+				pastResolutions && pastResolutions.length > 0
+					? `\n\nHistorical context from past merges:\n${pastResolutions.join("\n")}\n`
+					: "";
 			const prompt = [
 				"You are a merge conflict resolver. Output ONLY the resolved file content.",
 				"Rules: NO explanation, NO markdown fencing, NO conversation, NO preamble.",
 				"Output the raw file content as it should appear on disk.",
-				"Choose the best combination of both sides of this conflict:\n\n",
+				"Choose the best combination of both sides of this conflict:",
+				historyContext,
+				"\n\n",
 				content,
 			].join(" ");
 
@@ -334,6 +347,130 @@ async function tryReimagine(
 }
 
 /**
+ * Parse mulch search output for conflict patterns.
+ * Extracts structured data from pattern descriptions recorded by recordConflictPattern().
+ */
+export function parseConflictPatterns(searchOutput: string): ParsedConflictPattern[] {
+	const patterns: ParsedConflictPattern[] = [];
+	// Simple approach: match to end of line/sentence and manually strip trailing period
+	const regex =
+		/Merge conflict (resolved|failed) at tier (clean-merge|auto-resolve|ai-resolve|reimagine)\.\s*Branch:\s*(\S+)\.\s*Agent:\s*(\S+)\.\s*Conflicting files:\s*(.+?)(?=\.(?:\s|$))/g;
+
+	let match = regex.exec(searchOutput);
+	while (match !== null) {
+		const outcome = match[1];
+		const tier = match[2];
+		const branch = match[3];
+		const agent = match[4];
+		const filesStr = match[5];
+
+		if (!outcome || !tier || !branch || !agent || !filesStr) {
+			match = regex.exec(searchOutput);
+			continue;
+		}
+
+		patterns.push({
+			tier: tier as ResolutionTier,
+			success: outcome === "resolved",
+			files: filesStr
+				.split(",")
+				.map((f) => f.trim())
+				.filter((f) => f.length > 0),
+			agent: agent.trim(),
+			branch: branch.trim(),
+		});
+
+		match = regex.exec(searchOutput);
+	}
+
+	return patterns;
+}
+
+/**
+ * Build conflict history from parsed patterns, scoped to the files in the current merge entry.
+ *
+ * Skip-tier logic: if a tier has failed >= 2 times for any overlapping file
+ * and never succeeded for those files, add it to skipTiers.
+ *
+ * Past resolutions: collect descriptions of successful resolutions involving
+ * overlapping files to enrich AI prompts.
+ *
+ * Predicted conflicts: files from historical patterns that overlap with the
+ * current entry files.
+ */
+export function buildConflictHistory(
+	patterns: ParsedConflictPattern[],
+	entryFiles: string[],
+): ConflictHistory {
+	const entryFileSet = new Set(entryFiles);
+
+	// Filter patterns to those that share files with the current entry
+	const relevantPatterns = patterns.filter((p) => p.files.some((f) => entryFileSet.has(f)));
+
+	if (relevantPatterns.length === 0) {
+		return { skipTiers: [], pastResolutions: [], predictedConflictFiles: [] };
+	}
+
+	// Build tier success/failure counts
+	const tierCounts = new Map<ResolutionTier, { successes: number; failures: number }>();
+	for (const p of relevantPatterns) {
+		const counts = tierCounts.get(p.tier) ?? { successes: 0, failures: 0 };
+		if (p.success) {
+			counts.successes++;
+		} else {
+			counts.failures++;
+		}
+		tierCounts.set(p.tier, counts);
+	}
+
+	// Skip tiers that have failed >= 2 times and never succeeded
+	const skipTiers: ResolutionTier[] = [];
+	for (const [tier, counts] of tierCounts) {
+		if (counts.failures >= 2 && counts.successes === 0) {
+			skipTiers.push(tier);
+		}
+	}
+
+	// Collect past successful resolutions
+	const pastResolutions: string[] = [];
+	for (const p of relevantPatterns) {
+		if (p.success) {
+			pastResolutions.push(
+				`Previously resolved at tier ${p.tier} for files: ${p.files.join(", ")}`,
+			);
+		}
+	}
+
+	// Predict conflict files: all files from relevant historical patterns
+	const predictedFileSet = new Set<string>();
+	for (const p of relevantPatterns) {
+		for (const f of p.files) {
+			predictedFileSet.add(f);
+		}
+	}
+	const predictedConflictFiles = [...predictedFileSet].sort();
+
+	return { skipTiers, pastResolutions, predictedConflictFiles };
+}
+
+/**
+ * Query mulch for historical conflict patterns related to the merge entry.
+ * Returns empty history if mulch is unavailable or search fails (fire-and-forget).
+ */
+async function queryConflictHistory(
+	mulchClient: MulchClient,
+	entry: MergeEntry,
+): Promise<ConflictHistory> {
+	try {
+		const searchOutput = await mulchClient.search("merge-conflict");
+		const patterns = parseConflictPatterns(searchOutput);
+		return buildConflictHistory(patterns, entry.filesModified);
+	} catch {
+		return { skipTiers: [], pastResolutions: [], predictedConflictFiles: [] };
+	}
+}
+
+/**
  * Record a merge conflict pattern to mulch for future learning.
  * Uses fire-and-forget (try/catch swallowing errors) so recording
  * never blocks or fails the merge itself.
@@ -419,27 +556,39 @@ export function createMergeResolver(options: {
 			}
 			conflictFiles = cleanResult.conflictFiles;
 
-			// Tier 2: Auto-resolve (keep incoming)
-			lastTier = "auto-resolve";
-			const autoResult = await tryAutoResolve(conflictFiles, repoRoot);
-			if (autoResult.success) {
-				if (options.mulchClient) {
-					recordConflictPattern(options.mulchClient, entry, "auto-resolve", conflictFiles, true);
-				}
-				return {
-					entry: { ...entry, status: "merged", resolvedTier: "auto-resolve" },
-					success: true,
-					tier: "auto-resolve",
-					conflictFiles,
-					errorMessage: null,
-				};
+			// Query conflict history (if mulchClient available)
+			let history: ConflictHistory = {
+				skipTiers: [],
+				pastResolutions: [],
+				predictedConflictFiles: [],
+			};
+			if (options.mulchClient) {
+				history = await queryConflictHistory(options.mulchClient, entry);
 			}
-			conflictFiles = autoResult.remainingConflicts;
+
+			// Tier 2: Auto-resolve (keep incoming)
+			if (!history.skipTiers.includes("auto-resolve")) {
+				lastTier = "auto-resolve";
+				const autoResult = await tryAutoResolve(conflictFiles, repoRoot);
+				if (autoResult.success) {
+					if (options.mulchClient) {
+						recordConflictPattern(options.mulchClient, entry, "auto-resolve", conflictFiles, true);
+					}
+					return {
+						entry: { ...entry, status: "merged", resolvedTier: "auto-resolve" },
+						success: true,
+						tier: "auto-resolve",
+						conflictFiles,
+						errorMessage: null,
+					};
+				}
+				conflictFiles = autoResult.remainingConflicts;
+			} // If skipped, fall through to next tier
 
 			// Tier 3: AI-resolve
-			if (options.aiResolveEnabled) {
+			if (options.aiResolveEnabled && !history.skipTiers.includes("ai-resolve")) {
 				lastTier = "ai-resolve";
-				const aiResult = await tryAiResolve(conflictFiles, repoRoot);
+				const aiResult = await tryAiResolve(conflictFiles, repoRoot, history.pastResolutions);
 				if (aiResult.success) {
 					if (options.mulchClient) {
 						recordConflictPattern(options.mulchClient, entry, "ai-resolve", conflictFiles, true);
@@ -456,7 +605,7 @@ export function createMergeResolver(options: {
 			}
 
 			// Tier 4: Re-imagine
-			if (options.reimagineEnabled) {
+			if (options.reimagineEnabled && !history.skipTiers.includes("reimagine")) {
 				lastTier = "reimagine";
 				const reimagineResult = await tryReimagine(entry, canonicalBranch, repoRoot);
 				if (reimagineResult.success) {

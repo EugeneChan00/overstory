@@ -18,8 +18,13 @@ import {
 	getDefaultBranch,
 	runGitInDir,
 } from "../test-helpers.ts";
-import type { MergeEntry } from "../types.ts";
-import { createMergeResolver, looksLikeProse } from "./resolver.ts";
+import type { MergeEntry, ParsedConflictPattern } from "../types.ts";
+import {
+	buildConflictHistory,
+	createMergeResolver,
+	looksLikeProse,
+	parseConflictPatterns,
+} from "./resolver.ts";
 
 /**
  * Helper to create a mock Bun.spawn return value for claude CLI mocking.
@@ -1073,6 +1078,265 @@ describe("createMergeResolver", () => {
 
 				// No recording on clean merge (no conflict occurred)
 				expect(recordCalls.length).toBe(0);
+			} finally {
+				await cleanupTempDir(repoDir);
+			}
+		});
+	});
+
+	describe("parseConflictPatterns", () => {
+		test("parses successful resolution pattern", () => {
+			const input =
+				"Merge conflict resolved at tier auto-resolve. Branch: feature-branch. Agent: test-builder. Conflicting files: src/test.ts.";
+			const patterns = parseConflictPatterns(input);
+			expect(patterns.length).toBe(1);
+			expect(patterns[0]?.tier).toBe("auto-resolve");
+			expect(patterns[0]?.success).toBe(true);
+			expect(patterns[0]?.files).toEqual(["src/test.ts"]);
+			expect(patterns[0]?.agent).toBe("test-builder");
+			expect(patterns[0]?.branch).toBe("feature-branch");
+		});
+
+		test("parses failed resolution pattern", () => {
+			const input =
+				"Merge conflict failed at tier ai-resolve. Branch: other-branch. Agent: my-agent. Conflicting files: src/foo.ts, src/bar.ts.";
+			const patterns = parseConflictPatterns(input);
+			expect(patterns.length).toBe(1);
+			expect(patterns[0]?.tier).toBe("ai-resolve");
+			expect(patterns[0]?.success).toBe(false);
+			expect(patterns[0]?.files).toEqual(["src/foo.ts", "src/bar.ts"]);
+		});
+
+		test("parses multiple patterns from search output", () => {
+			const input = [
+				"Some mulch header text",
+				"Merge conflict resolved at tier auto-resolve. Branch: b1. Agent: a1. Conflicting files: src/a.ts.",
+				"Other text in between",
+				"Merge conflict failed at tier reimagine. Branch: b2. Agent: a2. Conflicting files: src/b.ts, src/c.ts.",
+			].join("\n");
+			const patterns = parseConflictPatterns(input);
+			expect(patterns.length).toBe(2);
+		});
+
+		test("returns empty array for no matches", () => {
+			expect(parseConflictPatterns("")).toEqual([]);
+			expect(parseConflictPatterns("no patterns here")).toEqual([]);
+		});
+	});
+
+	describe("buildConflictHistory", () => {
+		test("returns empty history when no patterns match entry files", () => {
+			const patterns: ParsedConflictPattern[] = [
+				{
+					tier: "auto-resolve",
+					success: true,
+					files: ["unrelated.ts"],
+					agent: "a",
+					branch: "b",
+				},
+			];
+			const history = buildConflictHistory(patterns, ["src/test.ts"]);
+			expect(history.skipTiers).toEqual([]);
+			expect(history.pastResolutions).toEqual([]);
+			expect(history.predictedConflictFiles).toEqual([]);
+		});
+
+		test("builds skip tier list when tier fails >= 2 times with no successes", () => {
+			const patterns: ParsedConflictPattern[] = [
+				{
+					tier: "ai-resolve",
+					success: false,
+					files: ["src/test.ts"],
+					agent: "a",
+					branch: "b1",
+				},
+				{
+					tier: "ai-resolve",
+					success: false,
+					files: ["src/test.ts"],
+					agent: "a",
+					branch: "b2",
+				},
+			];
+			const history = buildConflictHistory(patterns, ["src/test.ts"]);
+			expect(history.skipTiers).toContain("ai-resolve");
+		});
+
+		test("does not skip tier if it has any successes", () => {
+			const patterns: ParsedConflictPattern[] = [
+				{
+					tier: "ai-resolve",
+					success: false,
+					files: ["src/test.ts"],
+					agent: "a",
+					branch: "b1",
+				},
+				{
+					tier: "ai-resolve",
+					success: false,
+					files: ["src/test.ts"],
+					agent: "a",
+					branch: "b2",
+				},
+				{
+					tier: "ai-resolve",
+					success: true,
+					files: ["src/test.ts"],
+					agent: "a",
+					branch: "b3",
+				},
+			];
+			const history = buildConflictHistory(patterns, ["src/test.ts"]);
+			expect(history.skipTiers).not.toContain("ai-resolve");
+		});
+
+		test("does not skip tier with only 1 failure", () => {
+			const patterns: ParsedConflictPattern[] = [
+				{
+					tier: "reimagine",
+					success: false,
+					files: ["src/test.ts"],
+					agent: "a",
+					branch: "b1",
+				},
+			];
+			const history = buildConflictHistory(patterns, ["src/test.ts"]);
+			expect(history.skipTiers).not.toContain("reimagine");
+		});
+
+		test("collects past successful resolutions", () => {
+			const patterns: ParsedConflictPattern[] = [
+				{
+					tier: "auto-resolve",
+					success: true,
+					files: ["src/test.ts"],
+					agent: "a",
+					branch: "b1",
+				},
+				{
+					tier: "ai-resolve",
+					success: true,
+					files: ["src/test.ts", "src/other.ts"],
+					agent: "b",
+					branch: "b2",
+				},
+			];
+			const history = buildConflictHistory(patterns, ["src/test.ts"]);
+			expect(history.pastResolutions.length).toBe(2);
+			expect(history.pastResolutions[0]).toContain("auto-resolve");
+			expect(history.pastResolutions[1]).toContain("ai-resolve");
+		});
+
+		test("predicts conflict files from historical patterns", () => {
+			const patterns: ParsedConflictPattern[] = [
+				{
+					tier: "auto-resolve",
+					success: true,
+					files: ["src/test.ts", "src/utils.ts"],
+					agent: "a",
+					branch: "b1",
+				},
+			];
+			const history = buildConflictHistory(patterns, ["src/test.ts"]);
+			expect(history.predictedConflictFiles).toContain("src/test.ts");
+			expect(history.predictedConflictFiles).toContain("src/utils.ts");
+		});
+
+		test("returns empty history for empty patterns array", () => {
+			const history = buildConflictHistory([], ["src/test.ts"]);
+			expect(history.skipTiers).toEqual([]);
+			expect(history.pastResolutions).toEqual([]);
+			expect(history.predictedConflictFiles).toEqual([]);
+		});
+	});
+
+	describe("Conflict history tier skipping", () => {
+		test("skips auto-resolve tier when history says it always fails for these files", async () => {
+			const repoDir = await createTempGitRepo();
+			try {
+				const defaultBranch = await getDefaultBranch(repoDir);
+				await setupDeleteModifyConflict(repoDir, defaultBranch);
+
+				const entry = makeTestEntry({
+					branchName: "feature-branch",
+					filesModified: ["src/test.ts"],
+				});
+
+				// Mock mulchClient that returns history showing auto-resolve always fails
+				const mockMulchClient = createMockMulchClient();
+				mockMulchClient.search = async () => {
+					return [
+						"Merge conflict failed at tier auto-resolve. Branch: b1. Agent: a1. Conflicting files: src/test.ts.",
+						"Merge conflict failed at tier auto-resolve. Branch: b2. Agent: a2. Conflicting files: src/test.ts.",
+					].join("\n");
+				};
+
+				// AI and reimagine disabled, auto-resolve should be skipped -> fails immediately
+				const resolver = createMergeResolver({
+					aiResolveEnabled: false,
+					reimagineEnabled: false,
+					mulchClient: mockMulchClient,
+				});
+
+				const result = await resolver.resolve(entry, defaultBranch, repoDir);
+
+				// Should fail, and the last tier should NOT be auto-resolve (it was skipped)
+				expect(result.success).toBe(false);
+			} finally {
+				await cleanupTempDir(repoDir);
+			}
+		});
+	});
+
+	describe("AI-resolve with history context", () => {
+		test("includes historical context in AI prompt when available", async () => {
+			const repoDir = await createTempGitRepo();
+			try {
+				const defaultBranch = await getDefaultBranch(repoDir);
+				await setupDeleteModifyConflict(repoDir, defaultBranch);
+
+				const entry = makeTestEntry({
+					branchName: "feature-branch",
+					filesModified: ["src/test.ts"],
+				});
+
+				// Mock mulchClient that returns successful resolution history
+				const mockMulchClient = createMockMulchClient();
+				mockMulchClient.search = async () => {
+					return "Merge conflict resolved at tier ai-resolve. Branch: old-branch. Agent: old-agent. Conflicting files: src/test.ts.";
+				};
+
+				// Capture the prompt sent to claude
+				let capturedPrompt = "";
+				const originalSpawn = Bun.spawn;
+				const selectiveMock = (...args: unknown[]): unknown => {
+					const cmd = args[0] as string[];
+					if (cmd?.[0] === "claude") {
+						capturedPrompt = cmd[3] ?? "";
+						return mockSpawnResult("resolved content\n", "", 0);
+					}
+					return originalSpawn.apply(Bun, args as Parameters<typeof Bun.spawn>);
+				};
+
+				const spawnSpy = spyOn(Bun, "spawn").mockImplementation(selectiveMock as typeof Bun.spawn);
+
+				try {
+					const resolver = createMergeResolver({
+						aiResolveEnabled: true,
+						reimagineEnabled: false,
+						mulchClient: mockMulchClient,
+					});
+
+					const result = await resolver.resolve(entry, defaultBranch, repoDir);
+
+					expect(result.success).toBe(true);
+					expect(result.tier).toBe("ai-resolve");
+					// Verify historical context was included in the prompt
+					expect(capturedPrompt).toContain("Historical context");
+					expect(capturedPrompt).toContain("ai-resolve");
+				} finally {
+					spawnSpy.mockRestore();
+				}
 			} finally {
 				await cleanupTempDir(repoDir);
 			}

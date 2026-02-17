@@ -277,6 +277,25 @@ export interface MergeResult {
 	errorMessage: string | null;
 }
 
+/** Parsed conflict pattern from a single mulch record. */
+export interface ParsedConflictPattern {
+	tier: ResolutionTier;
+	success: boolean;
+	files: string[];
+	agent: string;
+	branch: string;
+}
+
+/** Historical conflict data assembled from mulch search results. */
+export interface ConflictHistory {
+	/** Tiers to skip based on historical failure rates for these files. */
+	skipTiers: ResolutionTier[];
+	/** Descriptions of past successful resolutions for AI prompt enrichment. */
+	pastResolutions: string[];
+	/** Files predicted to conflict based on historical patterns. */
+	predictedConflictFiles: string[];
+}
+
 // === Watchdog ===
 
 export interface HealthCheck {

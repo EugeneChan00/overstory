@@ -25,9 +25,8 @@ Define a concrete, testable contract for generating Pi-compatible domain-agent a
 
 ### Required Choices (must be explicit before execution)
 
-1. Pi runtime source of truth:
-   - upstream `pi-mono`, or
-   - `oh-my-pi` fork
+1. Pi runtime source of truth (locked):
+   - upstream `pi-mono` (human decision, 2026-02-26)
 2. Pi-mode rollout policy:
    - `experimental` (default-off), or
    - generally enabled

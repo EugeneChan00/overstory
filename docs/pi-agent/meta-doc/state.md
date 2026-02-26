@@ -112,7 +112,10 @@ No install actions were executed in Discovery.
 
 ## Open Questions
 
-1. Source-of-truth Pi runtime target: `pi-mono` upstream vs `oh-my-pi` fork?
-2. Should Pi mode initially ship as `experimental` (default-off) until hook parity is complete?
-3. Should costs in Pi mode be disabled first, or approximated from provider/model metadata in phase 1?
-4. Assignment text asks to update `/home/zz/.agents/docs/concepts/gt-execution-contract.md`, but this conflicts with the “write only inside repo” boundary and the target file is absent. Local mirror update was created at `docs/pi-agent/meta-doc/gt-execution-contract.md`.
+1. Should Pi mode initially ship as `experimental` (default-off) until hook parity is complete?
+2. Should costs in Pi mode be disabled first, or approximated from provider/model metadata in phase 1?
+3. Assignment text asks to update `/home/zz/.agents/docs/concepts/gt-execution-contract.md`, but this conflicts with the “write only inside repo” boundary and the target file is absent. Local mirror update was created at `docs/pi-agent/meta-doc/gt-execution-contract.md`.
+
+## Decisions Locked
+
+1. Pi runtime source-of-truth: upstream `pi-mono` (human decision, 2026-02-26).

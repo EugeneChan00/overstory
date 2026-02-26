@@ -1,5 +1,7 @@
 // === Project Configuration ===
 
+export type RuntimeTarget = "claude" | "pi";
+
 export interface OverstoryConfig {
 	project: {
 		name: string;
@@ -36,6 +38,10 @@ export interface OverstoryConfig {
 		staleThresholdMs: number; // When to consider agent stale
 		zombieThresholdMs: number; // When to kill
 		nudgeIntervalMs: number; // Time between progressive nudge stages (default 60_000)
+	};
+	runtime?: {
+		target?: RuntimeTarget; // Default claude
+		piCommand?: string; // Pi CLI base command (phase-1 seam)
 	};
 	logging: {
 		verbose: boolean;

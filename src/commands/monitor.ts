@@ -19,6 +19,7 @@ import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import { createRuntimeLauncher } from "../runtime/launcher.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { createSession, isSessionAlive, killSession, sendKeys } from "../worktree/tmux.ts";
@@ -119,18 +120,22 @@ async function startMonitor(args: string[]): Promise<void> {
 			});
 		}
 
-		// Spawn tmux session at project root with Claude Code (interactive mode).
-		// Inject the monitor base definition via --append-system-prompt.
+		// Spawn tmux session at project root using the configured runtime launcher.
+		// Inject the monitor base definition via runtime prompt append.
 		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "monitor.md");
 		const agentDefFile = Bun.file(agentDefPath);
-		let claudeCmd = "claude --model sonnet --dangerously-skip-permissions";
+		let appendSystemPrompt: string | undefined;
 		if (await agentDefFile.exists()) {
-			const agentDef = await agentDefFile.text();
-			const escaped = agentDef.replace(/'/g, "'\\''");
-			claudeCmd += ` --append-system-prompt '${escaped}'`;
+			appendSystemPrompt = await agentDefFile.text();
 		}
-		const pid = await createSession(tmuxSession, projectRoot, claudeCmd, {
+		const runtimeLauncher = createRuntimeLauncher(config);
+		const runtimeCmd = runtimeLauncher.buildInteractiveCommand({
+			model: "sonnet",
+			appendSystemPrompt,
+		});
+		const pid = await createSession(tmuxSession, projectRoot, runtimeCmd, {
 			OVERSTORY_AGENT_NAME: MONITOR_NAME,
+			OVERSTORY_RUNTIME_TARGET: runtimeLauncher.target,
 		});
 
 		// Record session BEFORE sending the beacon so that hook-triggered

@@ -19,6 +19,7 @@ import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createBeadsClient } from "../beads/client.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import { createRuntimeLauncher } from "../runtime/launcher.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 import { createSession, isSessionAlive, killSession, sendKeys } from "../worktree/tmux.ts";
@@ -182,19 +183,23 @@ async function startSupervisor(args: string[]): Promise<void> {
 			});
 		}
 
-		// Spawn tmux session at project root with Claude Code (interactive mode).
-		// Inject the supervisor base definition via --append-system-prompt.
+		// Spawn tmux session at project root using the configured runtime launcher.
+		// Inject the supervisor base definition via runtime prompt append.
 		const tmuxSession = `overstory-${config.project.name}-supervisor-${flags.name}`;
 		const agentDefPath = join(projectRoot, ".overstory", "agent-defs", "supervisor.md");
 		const agentDefFile = Bun.file(agentDefPath);
-		let claudeCmd = "claude --model opus --dangerously-skip-permissions";
+		let appendSystemPrompt: string | undefined;
 		if (await agentDefFile.exists()) {
-			const agentDef = await agentDefFile.text();
-			const escaped = agentDef.replace(/'/g, "'\\''");
-			claudeCmd += ` --append-system-prompt '${escaped}'`;
+			appendSystemPrompt = await agentDefFile.text();
 		}
-		const pid = await createSession(tmuxSession, projectRoot, claudeCmd, {
+		const runtimeLauncher = createRuntimeLauncher(config);
+		const runtimeCmd = runtimeLauncher.buildInteractiveCommand({
+			model: "opus",
+			appendSystemPrompt,
+		});
+		const pid = await createSession(tmuxSession, projectRoot, runtimeCmd, {
 			OVERSTORY_AGENT_NAME: flags.name,
+			OVERSTORY_RUNTIME_TARGET: runtimeLauncher.target,
 		});
 
 		// Send beacon after TUI initialization delay

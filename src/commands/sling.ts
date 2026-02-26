@@ -13,7 +13,7 @@
  * 9. Deploy hooks config
  * 10. Claim beads issue
  * 11. Create agent identity
- * 12. Create tmux session running claude
+ * 12. Create tmux session via runtime launcher
  * 13. Record session in SessionStore + increment run agent count
  * 14. Return AgentSession
  */
@@ -29,6 +29,7 @@ import { createBeadsClient } from "../beads/client.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, HierarchyError, ValidationError } from "../errors.ts";
 import { createMulchClient } from "../mulch/client.ts";
+import { createRuntimeLauncher } from "../runtime/launcher.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { createRunStore } from "../sessions/store.ts";
 import type { AgentSession, OverlayConfig } from "../types.ts";
@@ -421,12 +422,16 @@ export async function slingCommand(args: string[]): Promise<void> {
 			});
 		}
 
-		// 12. Create tmux session running claude in interactive mode
+		// 12. Create tmux session using the active runtime launcher
 		const tmuxSessionName = `overstory-${config.project.name}-${name}`;
-		const claudeCmd = `claude --model ${agentDef.model} --dangerously-skip-permissions`;
-		const pid = await createSession(tmuxSessionName, worktreePath, claudeCmd, {
+		const runtimeLauncher = createRuntimeLauncher(config);
+		const runtimeCmd = runtimeLauncher.buildInteractiveCommand({
+			model: agentDef.model,
+		});
+		const pid = await createSession(tmuxSessionName, worktreePath, runtimeCmd, {
 			OVERSTORY_AGENT_NAME: name,
 			OVERSTORY_WORKTREE_PATH: worktreePath,
+			OVERSTORY_RUNTIME_TARGET: runtimeLauncher.target,
 		});
 
 		// 13. Record session BEFORE sending the beacon so that hook-triggered

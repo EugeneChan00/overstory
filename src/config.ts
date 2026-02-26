@@ -43,6 +43,10 @@ export const DEFAULT_CONFIG: OverstoryConfig = {
 		zombieThresholdMs: 600_000, // 10 minutes
 		nudgeIntervalMs: 60_000, // 1 minute between progressive nudge stages
 	},
+	runtime: {
+		target: "claude",
+		piCommand: "pi",
+	},
 	logging: {
 		verbose: false,
 		redactSecrets: true,
@@ -413,6 +417,33 @@ function validateConfig(config: OverstoryConfig): void {
 			field: "mulch.primeFormat",
 			value: config.mulch.primeFormat,
 		});
+	}
+
+	// runtime.target must be one of the supported runtime adapters if provided
+	if (config.runtime?.target !== undefined) {
+		const validRuntimeTargets = ["claude", "pi"] as const;
+		if (!validRuntimeTargets.includes(config.runtime.target)) {
+			throw new ValidationError(
+				`runtime.target must be one of: ${validRuntimeTargets.join(", ")}`,
+				{
+					field: "runtime.target",
+					value: config.runtime.target,
+				},
+			);
+		}
+	}
+
+	// runtime.piCommand must be a non-empty string if provided
+	if (config.runtime?.piCommand !== undefined) {
+		if (
+			typeof config.runtime.piCommand !== "string" ||
+			config.runtime.piCommand.trim().length === 0
+		) {
+			throw new ValidationError("runtime.piCommand must be a non-empty string", {
+				field: "runtime.piCommand",
+				value: config.runtime.piCommand,
+			});
+		}
 	}
 }
 

@@ -309,6 +309,62 @@ describe("logCommand", () => {
 		expect(metrics[0]?.parentAgent).toBe("parent-agent");
 	});
 
+	test("session-end in pi runtime records deterministic transcript-skip marker", async () => {
+		await Bun.write(
+			join(tempDir, ".overstory", "config.yaml"),
+			[
+				"project:",
+				"  name: test",
+				`  root: ${tempDir}`,
+				"  canonicalBranch: main",
+				"runtime:",
+				"  target: pi",
+				"  piCommand: pi-mono",
+			].join("\n"),
+		);
+
+		const sessionsDbPath = join(tempDir, ".overstory", "sessions.db");
+		const session: AgentSession = {
+			id: "session-pi-metrics",
+			agentName: "pi-metrics-agent",
+			capability: "scout",
+			worktreePath: "/tmp/metrics",
+			branchName: "metrics-branch",
+			beadId: "bead-pi-001",
+			tmuxSession: "metrics-tmux",
+			state: "working",
+			pid: 54321,
+			parentAgent: "parent-agent",
+			depth: 1,
+			runId: null,
+			startedAt: new Date(Date.now() - 60_000).toISOString(),
+			lastActivity: new Date().toISOString(),
+			escalationLevel: 0,
+			stalledSince: null,
+		};
+		const sessStore = createSessionStore(sessionsDbPath);
+		sessStore.upsert(session);
+		sessStore.close();
+
+		await logCommand([
+			"session-end",
+			"--agent",
+			"pi-metrics-agent",
+			"--transcript",
+			"/tmp/nonexistent-transcript.jsonl",
+		]);
+
+		const logsDir = join(tempDir, ".overstory", "logs", "pi-metrics-agent");
+		const entries = await readdir(logsDir);
+		const sessionDirName = entries.find((entry) => entry !== ".current-session");
+		expect(sessionDirName).toBeDefined();
+		const sessionDir = join(logsDir, sessionDirName ?? "");
+		const eventsContent = await Bun.file(join(sessionDir, "events.ndjson")).text();
+		expect(eventsContent).toContain("metrics.transcript.skipped");
+		expect(eventsContent).toContain("runtime_not_supported");
+		expect(eventsContent).toContain('"runtime":"pi"');
+	});
+
 	test("session-end does NOT transition coordinator to completed (persistent agent)", async () => {
 		// Create sessions.db with a coordinator agent
 		const dbPath = join(tempDir, ".overstory", "sessions.db");

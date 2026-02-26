@@ -30,7 +30,7 @@
 		"test": "bun test",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "if [ ! -d node_modules ]; then echo 'Missing dependencies. Run bun install first.' >&2; exit 1; fi; tsc --noEmit",
 		"version:bump": "bun scripts/version-bump.ts"
 	},
 	"dependencies": {},

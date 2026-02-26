@@ -51,6 +51,19 @@ Specs phase outputs (this phase):
 - This file (`specs.md`)
 - Updated `scope.md` with final safety boundaries
 
+## GT-Formula Skills Contract
+
+Execution handoff must be driven through the formula workflow (not ad-hoc execution).
+
+- Required execution path:
+  - `gt sling <pi-formula>.formula.toml --on ov-wisp-e4f`
+- Required skill context for execution workers:
+  - `gt-formula` skills (as dispatched by mayor)
+- Formula contract requirements:
+  1. Respect locked runtime source-of-truth: `pi-mono`
+  2. Keep Execution and Verification separated by bead stage
+  3. Preserve approval-gated install behavior
+
 ## System Prompt Policy (for generated Pi agents)
 
 Generated Pi agent prompt policy MUST include:

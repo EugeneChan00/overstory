@@ -44,6 +44,7 @@ No implementation artifacts, runtime wiring, or tool installs are part of this s
 - Subagent representation is constrained to:
   - additional files under `agents/`, or
   - files inside `docs/pi-agent/domain-agents/`
+- Execution orchestration must be formula-driven (`gt sling <formula> --on <bead>`) with `gt-formula` skills in the execution stage.
 - No runtime behavior changes are permitted in Specs.
 - No scaffold generation is permitted in Specs.
 

@@ -15,6 +15,7 @@ import { hooksCommand } from "./hooks.ts";
 
 let tempDir: string;
 const originalCwd = process.cwd();
+const originalRuntimeEnv = process.env.OVERSTORY_RUNTIME;
 
 /** Orchestrator hooks content for .overstory/hooks.json. */
 const SAMPLE_HOOKS = {
@@ -68,6 +69,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	if (originalRuntimeEnv === undefined) delete process.env.OVERSTORY_RUNTIME;
+	else process.env.OVERSTORY_RUNTIME = originalRuntimeEnv;
 	process.chdir(originalCwd);
 	await cleanupTempDir(tempDir);
 });
@@ -177,6 +180,15 @@ describe("hooks install", () => {
 		await expect(hooksCommand(["install"])).rejects.toThrow(ValidationError);
 	});
 
+	test("fails closed in pi runtime", async () => {
+		process.env.OVERSTORY_RUNTIME = "pi";
+		await Bun.write(
+			join(tempDir, ".overstory", "hooks.json"),
+			`${JSON.stringify(SAMPLE_HOOKS, null, "\t")}\n`,
+		);
+		await expect(hooksCommand(["install"])).rejects.toThrow(ValidationError);
+	});
+
 	test("writes JSON with trailing newline", async () => {
 		await Bun.write(
 			join(tempDir, ".overstory", "hooks.json"),
@@ -226,6 +238,12 @@ describe("hooks uninstall", () => {
 	test("handles missing settings.local.json gracefully", async () => {
 		const output = await captureStdout(() => hooksCommand(["uninstall"]));
 		expect(output).toContain("nothing to uninstall");
+	});
+
+	test("skips uninstall in pi runtime", async () => {
+		process.env.OVERSTORY_RUNTIME = "pi";
+		const output = await captureStdout(() => hooksCommand(["uninstall"]));
+		expect(output).toContain("pi runtime");
 	});
 
 	test("handles settings.local.json with no hooks key", async () => {
@@ -286,5 +304,14 @@ describe("hooks status", () => {
 		const parsed = JSON.parse(output) as Record<string, unknown>;
 		expect(parsed.sourceExists).toBe(true);
 		expect(parsed.installed).toBe(false);
+	});
+
+	test("pi runtime status reports unsupported", async () => {
+		process.env.OVERSTORY_RUNTIME = "pi";
+		const output = await captureStdout(() => hooksCommand(["status", "--json"]));
+		const parsed = JSON.parse(output) as Record<string, unknown>;
+		expect(parsed.installed).toBe(false);
+		expect(parsed.supported).toBe(false);
+		expect(parsed.runtime).toBe("pi");
 	});
 });

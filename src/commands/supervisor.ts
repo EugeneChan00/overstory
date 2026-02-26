@@ -19,6 +19,7 @@ import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { createBeadsClient } from "../beads/client.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import { resolveRuntimeCapabilities } from "../runtime/capabilities.ts";
 import { createRuntimeLauncher } from "../runtime/launcher.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
@@ -130,6 +131,7 @@ async function startSupervisor(args: string[]): Promise<void> {
 
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const runtimeCapabilities = resolveRuntimeCapabilities(config);
 	const projectRoot = config.project.root;
 
 	// Validate bead exists and is workable (open or in_progress)
@@ -165,8 +167,14 @@ async function startSupervisor(args: string[]): Promise<void> {
 			store.updateState(flags.name, "completed");
 		}
 
-		// Deploy supervisor-specific hooks to the project root's .claude/ directory.
-		await deployHooks(projectRoot, flags.name, "supervisor");
+		// Deploy supervisor-specific hooks to the project root in Claude runtime only.
+		if (runtimeCapabilities.supportsClaudeHooks) {
+			await deployHooks(projectRoot, flags.name, "supervisor", {
+				runtimeTarget: runtimeCapabilities.target,
+			});
+		} else if (!flags.json) {
+			process.stdout.write("  Hooks:    skipped (Pi runtime disables Claude hook deployment)\n");
+		}
 
 		// Create supervisor identity if first run
 		const identityBaseDir = join(projectRoot, ".overstory", "agents");

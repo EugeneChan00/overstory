@@ -748,6 +748,25 @@ describe("getCapabilityGuards", () => {
 		const guards = getCapabilityGuards("supervisor");
 		expect(guards.length).toBe(NATIVE_TEAM_TOOL_COUNT + 4);
 	});
+
+	test("pi runtime removes native team tool guards for builder", () => {
+		const guards = getCapabilityGuards("builder", { runtimeTarget: "pi" });
+		const matchers = guards.map((g) => g.matcher);
+		expect(matchers).not.toContain("Task");
+		expect(matchers).toContain("Bash");
+		expect(guards.length).toBe(1);
+	});
+
+	test("pi runtime removes native team tool guards for scout while keeping file guards", () => {
+		const guards = getCapabilityGuards("scout", { runtimeTarget: "pi" });
+		const matchers = guards.map((g) => g.matcher);
+		expect(matchers).not.toContain("TeamCreate");
+		expect(matchers).toContain("Write");
+		expect(matchers).toContain("Edit");
+		expect(matchers).toContain("NotebookEdit");
+		expect(matchers).toContain("Bash");
+		expect(guards.length).toBe(4);
+	});
 });
 
 describe("getDangerGuards", () => {

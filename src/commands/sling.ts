@@ -29,6 +29,7 @@ import { createBeadsClient } from "../beads/client.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, HierarchyError, ValidationError } from "../errors.ts";
 import { createMulchClient } from "../mulch/client.ts";
+import { resolveRuntimeCapabilities } from "../runtime/capabilities.ts";
 import { createRuntimeLauncher } from "../runtime/launcher.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { createRunStore } from "../sessions/store.ts";
@@ -199,6 +200,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 	const depthStr = getFlag(args, "--depth");
 	const depth = depthStr !== undefined ? Number.parseInt(depthStr, 10) : 0;
 	const forceHierarchy = args.includes("--force-hierarchy");
+	const json = args.includes("--json");
 
 	if (!name || name.trim().length === 0) {
 		throw new ValidationError("--name is required for sling", { field: "name" });
@@ -236,6 +238,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 	// 1. Load config
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const runtimeCapabilities = resolveRuntimeCapabilities(config);
 
 	// 2. Validate depth limit
 	// Hierarchy: orchestrator(0) -> lead(1) -> specialist(2)
@@ -396,8 +399,16 @@ export async function slingCommand(args: string[]): Promise<void> {
 			throw err;
 		}
 
-		// 9. Deploy hooks config (capability-specific guards)
-		await deployHooks(worktreePath, name, capability);
+		// 9. Deploy hooks config (capability-specific guards) in Claude runtime only
+		if (runtimeCapabilities.supportsClaudeHooks) {
+			await deployHooks(worktreePath, name, capability, {
+				runtimeTarget: runtimeCapabilities.target,
+			});
+		} else if (!json) {
+			process.stdout.write(
+				"⚠ Pi runtime: skipped Claude hook deployment (.claude/settings.local.json)\n",
+			);
+		}
 
 		// 10. Claim beads issue
 		if (config.beads.enabled) {
@@ -498,7 +509,7 @@ export async function slingCommand(args: string[]): Promise<void> {
 			pid,
 		};
 
-		if (args.includes("--json")) {
+		if (json) {
 			process.stdout.write(`${JSON.stringify(output)}\n`);
 		} else {
 			process.stdout.write(`🚀 Agent "${name}" launched!\n`);

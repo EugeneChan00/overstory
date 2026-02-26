@@ -18,6 +18,7 @@ import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import { resolveRuntimeCapabilities } from "../runtime/capabilities.ts";
 import { createRuntimeLauncher } from "../runtime/launcher.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
@@ -266,6 +267,7 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 	const monitorFlag = args.includes("--monitor");
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const runtimeCapabilities = resolveRuntimeCapabilities(config);
 	const projectRoot = config.project.root;
 	const watchdog = deps._watchdog ?? createDefaultWatchdog(projectRoot);
 	const monitor = deps._monitor ?? createDefaultMonitor(projectRoot);
@@ -300,7 +302,13 @@ async function startCoordinator(args: string[], deps: CoordinatorDeps = {}): Pro
 		// ensures they only activate when OVERSTORY_AGENT_NAME is set (i.e. for
 		// the coordinator's tmux session), so the user's own Claude Code session
 		// at the project root is unaffected.
-		await deployHooks(projectRoot, COORDINATOR_NAME, "coordinator");
+		if (runtimeCapabilities.supportsClaudeHooks) {
+			await deployHooks(projectRoot, COORDINATOR_NAME, "coordinator", {
+				runtimeTarget: runtimeCapabilities.target,
+			});
+		} else if (!json) {
+			process.stdout.write("  Hooks:    skipped (Pi runtime disables Claude hook deployment)\n");
+		}
 
 		// Create coordinator identity if first run
 		const identityBaseDir = join(projectRoot, ".overstory", "agents");

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { AgentError } from "../errors.ts";
+import type { RuntimeTarget } from "../types.ts";
 
 /**
  * Capabilities that must never modify project files.
@@ -121,6 +122,14 @@ const SAFE_BASH_PREFIXES = [
 interface HookEntry {
 	matcher: string;
 	hooks: Array<{ type: string; command: string }>;
+}
+
+interface CapabilityGuardOptions {
+	runtimeTarget?: RuntimeTarget;
+}
+
+interface DeployHookOptions {
+	runtimeTarget?: RuntimeTarget;
 }
 
 /**
@@ -429,24 +438,30 @@ export function getBashPathBoundaryGuards(): HookEntry[] {
  * Implementation capabilities (builder, merger) get:
  * - Bash path boundary guards (validates absolute paths stay in worktree)
  *
- * All overstory-managed agents get:
+ * Claude-runtime overstory-managed agents get:
  * - Claude Code native team/task tool blocks (Task, TeamCreate, SendMessage, etc.)
  *   to ensure delegation goes through overstory sling
  *
  * Note: All capabilities also receive Bash danger guards via getDangerGuards().
  */
-export function getCapabilityGuards(capability: string): HookEntry[] {
+export function getCapabilityGuards(
+	capability: string,
+	options: CapabilityGuardOptions = {},
+): HookEntry[] {
 	const guards: HookEntry[] = [];
+	const runtimeTarget = options.runtimeTarget ?? "claude";
 
 	// Block Claude Code native team/task tools for ALL overstory agents.
 	// Agents must use `overstory sling` for delegation, not native Task/Team tools.
-	const teamToolGuards = NATIVE_TEAM_TOOLS.map((tool) =>
-		blockGuard(
-			tool,
-			`Overstory agents must use 'overstory sling' for delegation — ${tool} is not allowed`,
-		),
-	);
-	guards.push(...teamToolGuards);
+	if (runtimeTarget === "claude") {
+		const teamToolGuards = NATIVE_TEAM_TOOLS.map((tool) =>
+			blockGuard(
+				tool,
+				`Overstory agents must use 'overstory sling' for delegation — ${tool} is not allowed`,
+			),
+		);
+		guards.push(...teamToolGuards);
+	}
 
 	if (NON_IMPLEMENTATION_CAPABILITIES.has(capability)) {
 		const toolGuards = WRITE_TOOLS.map((tool) =>
@@ -492,6 +507,7 @@ export async function deployHooks(
 	worktreePath: string,
 	agentName: string,
 	capability = "builder",
+	options: DeployHookOptions = {},
 ): Promise<void> {
 	const templatePath = getTemplatePath();
 	const file = Bun.file(templatePath);
@@ -523,7 +539,9 @@ export async function deployHooks(
 	const config = JSON.parse(content) as { hooks: Record<string, HookEntry[]> };
 	const pathGuards = getPathBoundaryGuards();
 	const dangerGuards = getDangerGuards(agentName);
-	const capabilityGuards = getCapabilityGuards(capability);
+	const capabilityGuards = getCapabilityGuards(capability, {
+		runtimeTarget: options.runtimeTarget,
+	});
 	const allGuards = [...pathGuards, ...dangerGuards, ...capabilityGuards];
 
 	if (allGuards.length > 0) {

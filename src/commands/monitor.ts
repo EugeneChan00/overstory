@@ -19,6 +19,7 @@ import { deployHooks } from "../agents/hooks-deployer.ts";
 import { createIdentity, loadIdentity } from "../agents/identity.ts";
 import { loadConfig } from "../config.ts";
 import { AgentError, ValidationError } from "../errors.ts";
+import { resolveRuntimeCapabilities } from "../runtime/capabilities.ts";
 import { createRuntimeLauncher } from "../runtime/launcher.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
@@ -74,6 +75,7 @@ async function startMonitor(args: string[]): Promise<void> {
 	const shouldAttach = resolveAttach(args, !!process.stdout.isTTY);
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const runtimeCapabilities = resolveRuntimeCapabilities(config);
 	const projectRoot = config.project.root;
 	const tmuxSession = monitorTmuxSession(config.project.name);
 
@@ -100,10 +102,16 @@ async function startMonitor(args: string[]): Promise<void> {
 			store.updateState(MONITOR_NAME, "completed");
 		}
 
-		// Deploy monitor-specific hooks to the project root's .claude/ directory.
+		// Deploy monitor-specific hooks to the project root in Claude runtime only.
 		// The monitor gets the same structural enforcement as other non-implementation
 		// agents (Write/Edit/NotebookEdit blocked, dangerous bash commands blocked).
-		await deployHooks(projectRoot, MONITOR_NAME, "monitor");
+		if (runtimeCapabilities.supportsClaudeHooks) {
+			await deployHooks(projectRoot, MONITOR_NAME, "monitor", {
+				runtimeTarget: runtimeCapabilities.target,
+			});
+		} else if (!json) {
+			process.stdout.write("  Hooks:    skipped (Pi runtime disables Claude hook deployment)\n");
+		}
 
 		// Create monitor identity if first run
 		const identityBaseDir = join(projectRoot, ".overstory", "agents");

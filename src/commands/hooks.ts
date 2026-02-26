@@ -14,6 +14,7 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { loadConfig } from "../config.ts";
 import { ValidationError } from "../errors.ts";
+import { resolveRuntimeCapabilities } from "../runtime/capabilities.ts";
 
 const HOOKS_HELP = `overstory hooks — Manage orchestrator hooks
 
@@ -43,7 +44,14 @@ async function installHooks(args: string[]): Promise<void> {
 	const force = args.includes("--force");
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const runtimeCapabilities = resolveRuntimeCapabilities(config);
 	const projectRoot = config.project.root;
+	if (!runtimeCapabilities.supportsClaudeHooks) {
+		throw new ValidationError(
+			"Hooks install is disabled in pi runtime: Claude hook path .claude/settings.local.json is unsupported",
+			{ field: "runtime.target", value: runtimeCapabilities.target },
+		);
+	}
 
 	// Read source hooks from .overstory/hooks.json
 	const sourcePath = join(projectRoot, ".overstory", "hooks.json");
@@ -98,7 +106,14 @@ async function installHooks(args: string[]): Promise<void> {
 async function uninstallHooks(_args: string[]): Promise<void> {
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const runtimeCapabilities = resolveRuntimeCapabilities(config);
 	const projectRoot = config.project.root;
+	if (!runtimeCapabilities.supportsClaudeHooks) {
+		process.stdout.write(
+			"Hooks uninstall skipped: pi runtime has no Claude hook deployment to remove.\n",
+		);
+		return;
+	}
 
 	const targetPath = join(projectRoot, ".claude", "settings.local.json");
 	const targetFile = Bun.file(targetPath);
@@ -140,6 +155,7 @@ async function statusHooks(args: string[]): Promise<void> {
 	const json = args.includes("--json");
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const runtimeCapabilities = resolveRuntimeCapabilities(config);
 	const projectRoot = config.project.root;
 
 	const sourcePath = join(projectRoot, ".overstory", "hooks.json");
@@ -155,8 +171,27 @@ async function statusHooks(args: string[]): Promise<void> {
 		installed = !!parsed.hooks;
 	}
 
+	if (!runtimeCapabilities.supportsClaudeHooks) {
+		if (json) {
+			process.stdout.write(
+				`${JSON.stringify({
+					sourceExists,
+					installed: false,
+					supported: false,
+					runtime: runtimeCapabilities.target,
+				})}\n`,
+			);
+		} else {
+			process.stdout.write("Hooks runtime support: disabled (pi runtime)\n");
+			process.stdout.write(
+				"Claude hook path (.claude/settings.local.json) is gated until Pi hook adapter exists.\n",
+			);
+		}
+		return;
+	}
+
 	if (json) {
-		process.stdout.write(`${JSON.stringify({ sourceExists, installed })}\n`);
+		process.stdout.write(`${JSON.stringify({ sourceExists, installed, supported: true })}\n`);
 	} else {
 		process.stdout.write(
 			`Hooks source (.overstory/hooks.json): ${sourceExists ? "present" : "missing"}\n`,

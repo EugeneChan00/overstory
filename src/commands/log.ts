@@ -23,6 +23,7 @@ import { createMailStore } from "../mail/store.ts";
 import { createMetricsStore } from "../metrics/store.ts";
 import { estimateCost, parseTranscriptUsage } from "../metrics/transcript.ts";
 import { createMulchClient, type MulchClient } from "../mulch/client.ts";
+import { resolveRuntimeCapabilities } from "../runtime/capabilities.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import type { AgentSession } from "../types.ts";
 
@@ -397,6 +398,7 @@ export async function logCommand(args: string[]): Promise<void> {
 
 	const cwd = process.cwd();
 	const config = await loadConfig(cwd);
+	const runtimeCapabilities = resolveRuntimeCapabilities(config);
 	const logsBase = join(config.project.root, ".overstory", "logs");
 	const sessionDir = await getSessionDir(logsBase, agentName);
 
@@ -473,7 +475,7 @@ export async function logCommand(args: string[]): Promise<void> {
 				}
 
 				// Throttled token snapshot recording
-				if (sessionId) {
+				if (sessionId && runtimeCapabilities.supportsClaudeTranscriptMetrics) {
 					try {
 						// Throttle check
 						const snapshotMarkerPath = join(logsBase, agentName, ".last-snapshot");
@@ -517,6 +519,11 @@ export async function logCommand(args: string[]): Promise<void> {
 					} catch {
 						// Non-fatal: snapshot recording should not break tool-end handling
 					}
+				} else if (sessionId) {
+					logger.info("metrics.snapshot.skipped", {
+						reason: "runtime_not_supported",
+						runtime: runtimeCapabilities.target,
+					});
 				}
 			}
 			break;
@@ -579,7 +586,7 @@ export async function logCommand(args: string[]): Promise<void> {
 						let estimatedCostUsd: number | null = null;
 						let modelUsed: string | null = null;
 
-						if (transcriptPath) {
+						if (transcriptPath && runtimeCapabilities.supportsClaudeTranscriptMetrics) {
 							try {
 								const usage = await parseTranscriptUsage(transcriptPath);
 								inputTokens = usage.inputTokens;
@@ -591,6 +598,11 @@ export async function logCommand(args: string[]): Promise<void> {
 							} catch {
 								// Non-fatal: transcript parsing should not break metrics
 							}
+						} else if (transcriptPath) {
+							logger.info("metrics.transcript.skipped", {
+								reason: "runtime_not_supported",
+								runtime: runtimeCapabilities.target,
+							});
 						}
 
 						metricsStore.recordSession({

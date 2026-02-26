@@ -30,3 +30,9 @@ Thumbs.db
 
 # Test artifacts
 coverage/
+
+# Gas Town (added by gt)
+.runtime/
+.claude/commands/
+.logs/
+.todos/

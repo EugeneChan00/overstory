@@ -99,7 +99,7 @@ Generated Pi agent prompt policy MUST include:
 
 Install policy:
 - Discovery/Specs: `auto_install_allowed=false`
-- After explicit human/mayor approval in execution: `auto_install_allowed=true`
+- After explicit user approval in execution: `auto_install_allowed=true`
 
 Allowed install actions after approval must be:
 1. Enumerated before execution.

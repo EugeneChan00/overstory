@@ -6,7 +6,7 @@ Issues: `ov-wisp-56j`, `ov-wisp-qg1`
 
 ## Scope Statement
 
-This scope covers discovery-only analysis for Pi runtime compatibility in Overstory.  
+This scope covers documentation-only Discovery and Specs work for Pi runtime compatibility in Overstory.  
 No implementation artifacts, runtime wiring, or tool installs are part of this scope.
 
 ## Authoritative Run Docs
@@ -78,6 +78,7 @@ If ambiguity appears, prefer narrower scope:
 
 - `docs/pi-agent/meta-doc/state.md`
 - `docs/pi-agent/meta-doc/scope.md`
+- `docs/pi-agent/meta-doc/specs.md`
 - `docs/pi-agent/meta-doc/gt-execution-contract.md` (local mirror update due boundary conflict)
 
 ## Exit Criteria (Discovery Complete)

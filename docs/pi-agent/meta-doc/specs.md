@@ -64,6 +64,19 @@ Execution handoff must be driven through the formula workflow (not ad-hoc execut
   2. Keep Execution and Verification separated by bead stage
   3. Preserve approval-gated install behavior
 
+## Run Scope Authority Contract
+
+All downstream execution must be governed by this document set:
+
+1. `state.md`
+   - current decisions, locked choices, and open questions
+2. `scope.md`
+   - hard boundaries, safety model, and prohibited actions
+3. `specs.md` (this file)
+   - inputs→choices→outputs contract and acceptance gates
+
+If these documents conflict, execution must stop and request clarification before implementation.
+
 ## System Prompt Policy (for generated Pi agents)
 
 Generated Pi agent prompt policy MUST include:

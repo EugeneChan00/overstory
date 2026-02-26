@@ -9,6 +9,13 @@ Issues: `ov-wisp-56j`, `ov-wisp-qg1`
 This scope covers discovery-only analysis for Pi runtime compatibility in Overstory.  
 No implementation artifacts, runtime wiring, or tool installs are part of this scope.
 
+## Authoritative Run Docs
+
+Execution scope is defined by this three-document contract:
+1. `state.md` for active decisions and locked choices.
+2. `scope.md` (this file) for boundaries and safety rules.
+3. `specs.md` for testable contract and acceptance criteria.
+
 ## In Scope
 
 - Audit of current Overstory team features and runtime assumptions.

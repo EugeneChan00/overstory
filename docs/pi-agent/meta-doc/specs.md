@@ -120,6 +120,18 @@ Pi execution must enforce this disposition set:
 - `REMOVE (Pi mode only)`:
   - Claude-native team/tool guard assumptions that do not map to Pi
 
+## Pi-Unsupported Team Features: Mandatory Gate/Remove Map
+
+Execution planning for Pi mode must include these mandatory dispositions:
+
+| Team Feature | Pi Support Status | Required Disposition | Required Behavior |
+|---|---|---|---|
+| Claude hook deploy path/events (`.claude/settings.local.json`, Claude hook events) | Unsupported | `GATE` | Fail closed in Pi mode with explicit diagnostic until Pi hook adapter exists |
+| Claude transcript/cost pipeline (`~/.claude/projects/*.jsonl`, Claude tier pricing) | Unsupported | `GATE` | Disable in Pi mode with clear message until Pi metrics adapter exists |
+| Claude-native team/tool guard assumptions | Unsupported | `REMOVE` (Pi mode only) | Remove/replace with Pi-relevant guards; keep Claude guards only in Claude mode |
+
+Any Pi-unsupported feature not listed above must be added to this map before execution work begins.
+
 ## Acceptance Checks
 
 ### Specs Acceptance (this phase)
@@ -129,6 +141,8 @@ Pi execution must enforce this disposition set:
 - Subagent representation options are explicit.
 - System prompt policy includes tools + never-do constraints.
 - Install gate policy is explicit and approval-based.
+- Pi-unsupported team features are explicitly mapped to `GATE` or `REMOVE` with required behavior.
+- Specs outputs do not include runtime behavior changes.
 
 ### Execution Readiness Acceptance (for next phase)
 
@@ -141,3 +155,12 @@ Pi execution must enforce this disposition set:
 
 This specs phase does not authorize implementation work.  
 Only contracts, acceptance gates, and boundaries are produced here.
+
+## Specs Non-Execution Guard
+
+The following actions are prohibited in this phase:
+- modifying runtime behavior (`src/**`, runtime command wiring, hook implementation)
+- scaffolding runtime artifacts under `docs/pi-agent/domain-agents/`
+- running installs or environment mutation
+
+If any of the above is needed, stop Specs execution and sling the correct execution bead.

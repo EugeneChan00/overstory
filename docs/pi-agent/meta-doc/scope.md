@@ -43,6 +43,7 @@ Execution scope is defined by this three-document contract:
 - Do not edit `~/.agents/docs/meta-docs/*`.
 - Do not install tools/packages without explicit approval.
 - If a feature is unsupported by Pi, it must be gated or removed in planned execution.
+- Specs-phase diffs must stay in `docs/pi-agent/meta-doc/`; runtime/code edits are out of scope.
 
 ## Final Boundaries (Specs Lock)
 
@@ -54,6 +55,7 @@ Execution scope is defined by this three-document contract:
 - Execution orchestration must be formula-driven (`gt sling <formula> --on <bead>`) with `gt-formula` skills in the execution stage.
 - No runtime behavior changes are permitted in Specs.
 - No scaffold generation is permitted in Specs.
+- Any requirement to change runtime behavior or scaffold artifacts must be re-slung to Execution (`ov-wisp-e4f`) rather than done in Specs.
 
 ## Safety Model
 

@@ -29,6 +29,19 @@ Success for Discovery:
 - Do not install tools/packages without explicit user approval.
 - Do not keep agent-team features enabled when Pi cannot support them; gate or remove them.
 
+## Execution Update (ov-wisp-e4f)
+
+Execution re-enable source:
+- Explicit human instruction in-session: "please continue on the steps".
+
+Scaffolding completed:
+- `docs/pi-agent/domain-agents/README.md`
+- `docs/pi-agent/domain-agents/example-pi-domain-agent.md`
+
+Install status:
+- No tool/package installs were executed.
+- Install approval is still treated as explicit-user-approval gated.
+
 ## Key Findings (code audit)
 
 1. Launch path is Claude-specific today.

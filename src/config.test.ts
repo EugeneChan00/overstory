@@ -37,6 +37,8 @@ describe("loadConfig", () => {
 		expect(config.beads.enabled).toBe(true);
 		expect(config.mulch.enabled).toBe(true);
 		expect(config.mulch.primeFormat).toBe("markdown");
+		expect(config.runtime?.target).toBe("pi");
+		expect(config.runtime?.piCommand).toBe("pi-mono");
 		expect(config.logging.verbose).toBe(false);
 	});
 
@@ -63,6 +65,19 @@ agents:
 		// Non-overridden values keep defaults
 		expect(config.agents.maxDepth).toBe(2);
 		expect(config.beads.enabled).toBe(true);
+		expect(config.runtime?.target).toBe("claude");
+	});
+
+	test("legacy config without runtime block falls back to claude target", async () => {
+		await ensureOverstoryDir();
+		await writeConfig(`
+project:
+  canonicalBranch: develop
+`);
+
+		const config = await loadConfig(tempDir);
+		expect(config.runtime?.target).toBe("claude");
+		expect(config.runtime?.piCommand).toBe("pi-mono");
 	});
 
 	test("always sets project.root to the actual projectRoot", async () => {
@@ -375,6 +390,7 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_CONFIG.mulch).toBeDefined();
 		expect(DEFAULT_CONFIG.merge).toBeDefined();
 		expect(DEFAULT_CONFIG.watchdog).toBeDefined();
+		expect(DEFAULT_CONFIG.runtime).toBeDefined();
 		expect(DEFAULT_CONFIG.logging).toBeDefined();
 	});
 
@@ -386,5 +402,7 @@ describe("DEFAULT_CONFIG", () => {
 		expect(DEFAULT_CONFIG.watchdog.tier0IntervalMs).toBe(30_000);
 		expect(DEFAULT_CONFIG.watchdog.staleThresholdMs).toBe(300_000);
 		expect(DEFAULT_CONFIG.watchdog.zombieThresholdMs).toBe(600_000);
+		expect(DEFAULT_CONFIG.runtime?.target).toBe("pi");
+		expect(DEFAULT_CONFIG.runtime?.piCommand).toBe("pi-mono");
 	});
 });

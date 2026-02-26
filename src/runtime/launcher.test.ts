@@ -43,6 +43,7 @@ describe("createRuntimeLauncher", () => {
 	test("builds claude command with escaped prompt", () => {
 		delete process.env.OVERSTORY_RUNTIME;
 		const config = structuredClone(DEFAULT_CONFIG);
+		config.runtime = { target: "claude" };
 		const launcher = createRuntimeLauncher(config);
 
 		const command = launcher.buildInteractiveCommand({
